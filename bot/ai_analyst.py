@@ -33,7 +33,23 @@ class MarketAnalysis(BaseModel):
 
 
 def is_enabled() -> bool:
-    return bool(os.environ.get("ANTHROPIC_API_KEY"))
+    """Key from the environment, else gitignored anthropic_key.txt beside
+    the code (S4U scheduled tasks don't load user-level env vars - same
+    fallback the Polygon key needed). Loading into os.environ lets the
+    anthropic SDK pick it up without the value passing through any code."""
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return True
+    try:
+        from pathlib import Path
+
+        k = Path(__file__).resolve().parent.parent.joinpath(
+            "anthropic_key.txt").read_text(encoding="utf-8-sig").strip()
+        if k:
+            os.environ["ANTHROPIC_API_KEY"] = k
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def _describe_recent_action(bars: pd.DataFrame) -> str:

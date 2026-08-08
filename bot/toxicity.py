@@ -75,14 +75,37 @@ def refresh() -> dict:
                 data["etf"].append(f[i_sym].strip().upper())
     except Exception:
         log.warning("otherlisted.txt fetch failed", exc_info=True)
+    # Reverse splits come from TWO independent sources; each carries ITS OWN
+    # previous list forward on failure (review finding: an all-or-nothing
+    # merge let one healthy source silently discard the other's registry).
+    rss_set: set | None = None
     try:
-        # Reverse-split announcements (tickers appear in parentheses in titles)
+        # RSS: announcement headlines (tickers in parentheses in titles)
         xml = _fetch(SPLIT_RSS)
+        rss_set = set()
         for title in re.findall(r"<title>(.*?)</title>", xml, re.S):
             for tick in re.findall(r"\(([A-Z]{1,5})\)", title):
-                data["reverse_split"].append(tick)
+                rss_set.add(tick)
     except Exception:
         log.warning("reverse-split RSS fetch failed", exc_info=True)
+    poly_set: set | None = None
+    try:
+        # Polygon splits registry: every EXECUTED reverse split in the
+        # research-backed 12-month window (+announced upcoming) - the
+        # measured ~30% offering precursor. Returns None on any failure.
+        from bot import polygon
+
+        poly_set = polygon.recent_reverse_splits(days_back=365, days_fwd=30)
+        if poly_set:
+            log.info("polygon splits: %d reverse-split tickers (12mo window)",
+                     len(poly_set))
+    except Exception:
+        log.warning("polygon splits fetch failed", exc_info=True)
+    rs_rss = rss_set if rss_set is not None \
+        else set(prev.get("rs_rss") or prev.get("reverse_split", []))
+    rs_poly = poly_set if poly_set is not None else set(prev.get("rs_poly", []))
+    data["rs_rss"], data["rs_poly"] = sorted(rs_rss), sorted(rs_poly)
+    data["reverse_split"] = sorted(rs_rss | rs_poly)
 
     # Per-source carry-forward: a HALF-failed refresh must not silently
     # unblock every distressed name. Only overwrite a section we actually
@@ -94,8 +117,7 @@ def refresh() -> dict:
                         len(data["fsi"]))
     if nasdaq_ok or data["etf"] or data["fsi"]:
         data["etf"] = sorted(set(data["etf"]) or set(prev.get("etf", [])))
-        data["reverse_split"] = sorted(set(data["reverse_split"])
-                                       or set(prev.get("reverse_split", [])))
+        # (reverse_split already merged above with per-source carry-forward)
         import os
 
         tmp = TOX_FILE.with_suffix(".json.tmp")

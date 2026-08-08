@@ -80,6 +80,22 @@ def _basket(kind: str) -> list[str]:
 
 
 def study_event_study() -> tuple[dict, list[str]]:
+    # Survivorship-FREE version (Polygon: raw prices, delisted included)
+    # when the key exists; the Yahoo survivors-only study is the fallback.
+    try:
+        from bot import polygon
+
+        if polygon.available():
+            from run_polylab import study as poly_study
+
+            m, lines = poly_study(sessions=90)
+            # Zero events = Polygon unreachable (its functions never raise) -
+            # ledgering an empty study while a working fallback exists would
+            # invert stale-beats-blind (review finding). Fall through.
+            if m.get("events"):
+                return m, lines
+    except Exception:
+        pass
     from run_eventstudy import study, universe
 
     syms = universe()
@@ -210,7 +226,22 @@ def main() -> None:
         name, fn = ROTATION.get(today.weekday(), ("event_study", study_event_study))
 
     print(f"Research Lab {today.isoformat()} - running: {name}\n")
+
+    # Execution-quality pre-step: grade today's fills against the real tape
+    # (Polygon ticks). Best-effort - a markout failure never blocks the lab.
+    mk = None
+    try:
+        from run_markout import markout_today
+
+        mk = markout_today()
+        if mk:
+            print(mk + "\n")
+    except Exception:
+        pass
+
     metrics, lines = fn()
+    if mk:
+        lines += ["", mk]
     _ledger_write(today.isoformat(), name, metrics)
 
     header = [f"RESEARCH LAB  {today.isoformat()}  ({name})", "=" * 60]

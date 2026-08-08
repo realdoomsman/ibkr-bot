@@ -165,7 +165,8 @@ def enrich_symbol(symbol: str) -> dict:
             return cached
     except Exception:
         pass
-    out = {"date": today, "symbol": symbol, "float_m": None, "ipo_months": None}
+    out = {"date": today, "symbol": symbol, "float_m": None, "ipo_months": None,
+           "mcap_m": None}
     try:
         import yfinance as yf
 
@@ -180,9 +181,32 @@ def enrich_symbol(symbol: str) -> dict:
             out["ipo_months"] = round(months, 1)
     except Exception:
         log.debug("enrich failed for %s", symbol, exc_info=True)
-    # Cache only real data: an all-None result from a transient Yahoo hiccup
+    try:
+        # Polygon reference data fills whatever Yahoo dropped (Yahoo keeps
+        # first claim on float_m - floatShares is TRUE float; Polygon's
+        # shares-outstanding is the same proxy Yahoo's own fallback used).
+        # Always fetched when available: sec_type is the warrant/unit
+        # backstop the review demanded (5-letter W/U/R names pass every
+        # symbol-shape heuristic).
+        from bot import polygon
+
+        if polygon.available():
+            ov = polygon.ticker_overview(symbol)
+            if ov.get("type"):
+                out["sec_type"] = ov["type"]
+            if out["float_m"] is None and ov.get("shares_out_m"):
+                out["float_m"] = ov["shares_out_m"]
+            if out["mcap_m"] is None and ov.get("mcap_m"):
+                out["mcap_m"] = ov["mcap_m"]
+            if out["ipo_months"] is None and ov.get("list_date"):
+                d = dt.date.fromisoformat(ov["list_date"])
+                out["ipo_months"] = round((dt.date.today() - d).days / 30.44, 1)
+    except Exception:
+        log.debug("polygon enrich failed for %s", symbol, exc_info=True)
+    # Cache only real data: an all-None result from a transient hiccup
     # must not poison the whole day (review finding) - retry next call.
-    if out["float_m"] is not None or out["ipo_months"] is not None:
+    if out["float_m"] is not None or out["ipo_months"] is not None \
+            or out["mcap_m"] is not None:
         try:
             p.write_text(json.dumps(out), encoding="utf-8")
         except Exception:

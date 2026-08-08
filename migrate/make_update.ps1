@@ -21,7 +21,9 @@ robocopy $Root $stage /E `
         latest_review.txt lab_ledger.csv latest_lab.txt pennybrain_report.txt `
         pennymo_state.json.corrupt screen_results.csv `
         health.json watchdog_state.json heartbeat_*.txt `
-        toxicity.json tripwire_seen*.json | Out-Null
+        toxicity.json tripwire_seen*.json `
+        polygon_key.txt anthropic_key.txt spreadcheck.csv markouts.csv `
+        polylab_events.csv alerts.yaml | Out-Null
 if ($LASTEXITCODE -ge 8) { Write-Host "robocopy failed: $LASTEXITCODE" -ForegroundColor Red; exit 1 }
 $zip = Join-Path $Root "migrate\ibkr_update.zip"
 Compress-Archive -Path "$stage\*" -DestinationPath $zip -Force

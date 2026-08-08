@@ -34,8 +34,8 @@ MAX_PRICE = 5.0
 MIN_DVOL_M = 1.0          # watch-only floor - deliberately tiny
 TOP_N = 8
 COLS = ["date", "symbol", "captured", "price", "dollar_vol_m", "ann_vol", "best_day",
-        "mom_1m", "max_dd_2y", "float_m", "ipo_months", "sec_flags",
-        "fwd_1d", "fwd_5d", "fwd_20d", "status"]
+        "mom_1m", "max_dd_2y", "float_m", "ipo_months", "mcap_m", "news", "ai",
+        "sec_flags", "fwd_1d", "fwd_5d", "fwd_20d", "status"]
 
 
 def save_radar(radar: pd.DataFrame) -> None:
@@ -54,7 +54,11 @@ def load_radar() -> pd.DataFrame:
     return pd.DataFrame(columns=COLS)
 
 
-def capture_today(radar: pd.DataFrame, extra: list[str]) -> pd.DataFrame:
+def capture_today(radar: pd.DataFrame, extra: list[str],
+                  ai: bool = False) -> pd.DataFrame:
+    """ai=True (the 8:20 radar task only) adds a Claude advisory read per
+    pick. pennymo's mid-session refresh keeps ai=False - an API call has no
+    business inside the trading loop."""
     from run_screener import candidate_symbols, score_symbol
 
     today = dt.date.today().isoformat()
@@ -66,6 +70,22 @@ def capture_today(radar: pd.DataFrame, extra: list[str]) -> pd.DataFrame:
     except Exception as e:
         log.warning("screener unavailable (%s) - manual adds only", e)
         pool = []
+    try:
+        # Polygon full-market snapshot: every US ticker's live day-change in
+        # ONE call. Merged AHEAD of the screener pool - during pennymo's
+        # mid-session refresh this is how a fresh spike gets seen in seconds
+        # instead of on the screener's delayed pass. Fail-open.
+        from bot import polygon
+
+        snap = polygon.snapshot_movers(min_pct=10.0, lo=0.20, hi=MAX_PRICE,
+                                       min_dvol_m=MIN_DVOL_M)
+        if snap:
+            log.info("Polygon snapshot: %d live movers >=+10%% merged (top: %s)",
+                     len(snap), ", ".join(f"{m['symbol']} +{m['pct']}%"
+                                          for m in snap[:5]))
+            pool = [m["symbol"] for m in snap] + pool
+    except Exception:
+        log.debug("polygon snapshot unavailable", exc_info=True)
     from bot.config import BLOCKED_SYMBOLS
 
     tox = None
@@ -118,11 +138,50 @@ def capture_today(radar: pd.DataFrame, extra: list[str]) -> pd.DataFrame:
             en = enrich_symbol(row["symbol"])
         except Exception:
             en = {}
+        # Security-type backstop (review finding): 5-letter warrants/units/
+        # rights (HYMCW-style) pass every symbol-shape filter; Polygon's
+        # reference 'type' is authoritative. Fail-open: unknown type passes.
+        if en.get("sec_type") in ("WARRANT", "UNIT", "RIGHT", "ETF", "ETN",
+                                  "ETV", "FUND", "SP", "ADRW", "ADRR"):
+            log.info("RADAR skip %s: security type %s (not common stock)",
+                     row["symbol"], en["sec_type"])
+            continue
+        news = ""
+        arts = []
+        try:
+            # Catalyst check (Polygon news + sentiment): a spike WITH a story
+            # behaves differently from a story-less pump. Logged as evidence.
+            from bot import polygon
+
+            arts = polygon.ticker_news(row["symbol"], limit=3)
+            if arts:
+                news = f"{len(arts)}:{arts[0].get('sentiment') or '?'}"
+                log.info("NEWS %s [%s]: %s", row["symbol"],
+                         arts[0].get("sentiment") or "?", arts[0]["title"][:80])
+        except Exception:
+            pass
+        ai_read = ""
+        if ai:
+            try:
+                # Claude advisory read (ADVISORY ONLY - journaled evidence,
+                # graded against forward returns at gates like the Brain).
+                from bot import ai_analyst
+                from bot.data import fetch_yahoo_daily
+
+                if ai_analyst.is_enabled():
+                    res = ai_analyst.analyze_symbol(
+                        row["symbol"], fetch_yahoo_daily(row["symbol"], years=1),
+                        headlines=[a["title"] for a in arts] or None)
+                    if res:
+                        ai_read = f"{res.sentiment}:{res.confidence:.2f}"
+            except Exception:
+                log.debug("AI read failed for %s", row["symbol"], exc_info=True)
         pick = {
             "date": today, "symbol": row["symbol"],
             "captured": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "sec_flags": sec_flags,
+            "sec_flags": sec_flags, "news": news, "ai": ai_read,
             "float_m": en.get("float_m"), "ipo_months": en.get("ipo_months"),
+            "mcap_m": en.get("mcap_m"),
             "price": round(row["price"], 4),
             "dollar_vol_m": round(row["dollar_vol_m"], 2),
             "ann_vol": round(row["ann_vol"], 1),
@@ -243,7 +302,7 @@ def main() -> None:
     )
 
     radar = load_radar()
-    radar = capture_today(radar, [s.upper() for s in args.add])
+    radar = capture_today(radar, [s.upper() for s in args.add], ai=True)
     radar = update_forward_returns(radar)
     save_radar(radar)
 

@@ -850,10 +850,15 @@ def main() -> None:
                                 # spreadcheck run graded EDGE at 58% tier
                                 # agreement on pennies - when the real quote
                                 # is available it outranks the estimate.
+                                # Staleness gate (review): a quote >30s old
+                                # (halt, thin tape) must not be journaled as
+                                # current truth - drop it, EDGE stands.
                                 from bot import polygon
 
                                 if polygon.available():
-                                    nb, _ = polygon.last_nbbo_spread(symbol)
+                                    nb, nb_age = polygon.last_nbbo_spread(symbol)
+                                    if nb_age is None or nb_age > 30:
+                                        nb = None
                             except Exception:
                                 pass
                             try_enter(symbol, state, broker, risk, last,

@@ -105,6 +105,19 @@ class Alerter:
         if pushed or not self.topic:
             self.state[key] = dt.datetime.now().isoformat(timespec="seconds")
 
+    def keep(self, key: str) -> None:
+        """Preserve a key's dedupe stamp WITHOUT alerting - for checks that
+        could not be EVALUATED this run (review finding: an unevaluated
+        check is not a resolved one; clearing its stamp turns every
+        transient evaluation gap into a fresh page)."""
+        if key in self.state:
+            self.fired.add(key)
+
+    def keep_prefix(self, prefix: str) -> None:
+        for k in list(self.state):
+            if k.startswith(prefix):
+                self.keep(k)
+
     def finish(self) -> None:
         # Recovery reset: keys that did NOT fire this run are resolved -
         # clear their stamps so a recurrence alerts immediately.
@@ -287,6 +300,7 @@ def main() -> None:
             try:
                 from bot import polygon
 
+                sentinel_done = held_done = False
                 health["polygon"] = "no key"
                 if polygon.available():
                     health["polygon"] = "idle"
@@ -294,6 +308,7 @@ def main() -> None:
                         ppx, age = polygon.last_trade("AAPL")
                         health["polygon"] = "ok" if ppx else "unreachable"
                         if ppx and age is not None and age < 120:
+                            sentinel_done = True
                             ibx = _ibkr_last(broker, "AAPL")
                             if ibx is None:
                                 problems.append("IBKR returned no AAPL price")
@@ -310,19 +325,44 @@ def main() -> None:
                                          f"({(ibx / ppx - 1) * 100:+.2f}%). One tape is "
                                          f"stale - engine prices may be wrong.")
                             else:
+                                held_done = True
                                 for sym, q in positions:
                                     if q <= 0:
                                         continue
+                                    # Cheap gate first (review finding): no
+                                    # 3s IBKR snapshot unless Polygon has a
+                                    # fresh print to compare against.
                                     hp, ha = polygon.last_trade(sym)
+                                    if not hp or ha is None or ha >= 60:
+                                        continue
                                     hx = _ibkr_last(broker, sym)
-                                    if hp and ha is not None and ha < 60 and hx \
-                                            and abs(hx / hp - 1) > 0.05:
-                                        problems.append(f"feed divergence {sym}")
-                                        al.alert(f"feed_{sym}",
-                                                 f"IBKR fleet: {sym} price differs",
-                                                 f"Held {sym}: IBKR ${hx:.4f} vs Polygon "
-                                                 f"${hp:.4f} while actively trading. The "
-                                                 f"ladder may be working stale prices.")
+                                    if not hx or abs(hx / hp - 1) <= 0.05:
+                                        continue
+                                    # Persistence re-check (review finding):
+                                    # held names are +12% movers by selection;
+                                    # a violent leg moves >5% between the two
+                                    # reads with BOTH feeds healthy. Re-read
+                                    # Polygon AFTER the IBKR snapshot and
+                                    # require the same-direction divergence
+                                    # to persist (mirrors the shorts check).
+                                    hp2, ha2 = polygon.last_trade(sym)
+                                    if not hp2 or ha2 is None or ha2 >= 60 \
+                                            or abs(hx / hp2 - 1) <= 0.05 \
+                                            or (hx > hp) != (hx > hp2):
+                                        continue
+                                    problems.append(f"feed divergence {sym}")
+                                    al.alert(f"feed_{sym}",
+                                             f"IBKR fleet: {sym} price differs",
+                                             f"Held {sym}: IBKR ${hx:.4f} vs Polygon "
+                                             f"${hp:.4f}/${hp2:.4f} across two reads. "
+                                             f"The ladder may be working stale prices.")
+                # Unevaluated checks keep their dedupe stamps - a Polygon
+                # hiccup must not reset the 2h clock on a flapping alert.
+                if not sentinel_done:
+                    al.keep("feed_dead")
+                    al.keep("feed_diverge")
+                if not held_done:
+                    al.keep_prefix("feed_")
             except Exception:
                 log.debug("polygon cross-check failed", exc_info=True)
 

@@ -84,3 +84,6 @@ migrate/ibkr_update.zip
 smallcaplab_data/
 polygon_key.txt
 spreadcheck.csv
+markouts.csv
+polylab_events.csv
+anthropic_key.txt

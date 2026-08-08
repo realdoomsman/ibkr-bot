@@ -561,7 +561,8 @@ def flatten_all(state: dict, broker: Broker, risk: RiskManager) -> bool:
 
 def try_enter(symbol: str, state: dict, broker: Broker, risk: RiskManager,
               last: float, rvol: float | None = None,
-              spread: float | None = None) -> bool:
+              spread: float | None = None,
+              nbbo_spread: float | None = None) -> bool:
     today = dt.date.today().isoformat()
     entered_today = state["entered"].setdefault(today, [])
     if symbol in EXCLUDE or symbol in entered_today or symbol in state["pending"]:
@@ -631,13 +632,16 @@ def try_enter(symbol: str, state: dict, broker: Broker, risk: RiskManager,
     try:
         from bot.scanner import spread_tier
 
-        tier = spread_tier(spread)
+        # Real NBBO outranks the OHLC estimate when present: spreadcheck
+        # graded EDGE at 58% tier agreement on pennies, errors both ways.
+        tier = spread_tier(nbbo_spread if nbbo_spread is not None else spread)
     except Exception:
         tier = "unknown"
     journal(symbol, "BUY", "penny_entry", qty=qty, filled=got, signal_price=last,
             note=f"[penny] jeet ladder +8/+15, trail {int(TRAIL * 100)}%, floor on, "
                  f"rvol={rvol if rvol is not None else '?'}, "
-                 f"spread={spread if spread is not None else '?'}% tier={tier}")
+                 f"spread={spread if spread is not None else '?'}%, "
+                 f"nbbo={nbbo_spread if nbbo_spread is not None else '?'}% tier={tier}")
     return True  # rvol + spread are LOGGED evidence, not gates (yet)
 
 
@@ -840,8 +844,20 @@ def main() -> None:
                                 sp = edge_spread_pct(bars)
                             except Exception:
                                 pass
+                            nb = None
+                            try:
+                                # Real NBBO spread (Polygon, real-time). The
+                                # spreadcheck run graded EDGE at 58% tier
+                                # agreement on pennies - when the real quote
+                                # is available it outranks the estimate.
+                                from bot import polygon
+
+                                if polygon.available():
+                                    nb, _ = polygon.last_nbbo_spread(symbol)
+                            except Exception:
+                                pass
                             try_enter(symbol, state, broker, risk, last,
-                                      rvol=rv, spread=sp)
+                                      rvol=rv, spread=sp, nbbo_spread=nb)
                 except Exception:
                     log.exception("Scan error on %s - continuing", symbol)
             save_state(state)

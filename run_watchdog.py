@@ -16,6 +16,11 @@ Every run it checks:
   7. VM clock actually Eastern? -> tasks fire at wall-clock times
   8. Sunday evening special     -> IBKR kills sessions early Sunday; if TWS
                                    isn't logged in, Monday is a blackout day.
+  9. IBKR tape vs Polygon tape  -> a feed that FREEZES while looking healthy
+                                   is the classic silent bot-killer; an
+                                   independent second source catches it.
+                                   Only positive evidence of divergence
+                                   alerts - a Polygon outage stays quiet.
 
 Alerting rules (review-hardened): a problem pings the phone at most every
 2 hours; the dedupe stamp is written only AFTER a successful push (a failed
@@ -111,6 +116,24 @@ class Alerter:
 
 def rth_now(now: dt.datetime) -> bool:
     return now.weekday() < 5 and dt.time(9, 30) <= now.time() < dt.time(16, 0)
+
+
+def _ibkr_last(broker, symbol: str) -> float | None:
+    """One-shot snapshot of IBKR's last/close for the cross-check.
+    None on any failure - the CHECK must never crash the watchdog."""
+    try:
+        from ib_async import Stock
+
+        c = Stock(symbol, "SMART", "USD")
+        broker.ib.qualifyContracts(c)
+        t = broker.ib.reqMktData(c, "", snapshot=True)
+        broker.ib.sleep(3)
+        for v in (t.last, t.close):
+            if v and v == v and v > 0:  # v==v filters NaN
+                return float(v)
+        return None
+    except Exception:
+        return None
 
 
 def main() -> None:
@@ -255,6 +278,53 @@ def main() -> None:
                                 if h["action"] == "flatten" else "watch closely."))
             except Exception:
                 pass
+
+            # ---- 9. data-feed cross-check: IBKR tape vs Polygon tape ------
+            # Sentinel first (AAPL prints constantly - a fresh Polygon trade
+            # with no/different IBKR price means OUR feed is the liar), then
+            # held names with a looser bar (pennies gap; only judged while
+            # their tape is demonstrably active).
+            try:
+                from bot import polygon
+
+                health["polygon"] = "no key"
+                if polygon.available():
+                    health["polygon"] = "idle"
+                    if rth_now(now):
+                        ppx, age = polygon.last_trade("AAPL")
+                        health["polygon"] = "ok" if ppx else "unreachable"
+                        if ppx and age is not None and age < 120:
+                            ibx = _ibkr_last(broker, "AAPL")
+                            if ibx is None:
+                                problems.append("IBKR returned no AAPL price")
+                                al.alert("feed_dead", "IBKR fleet: market data FROZEN?",
+                                         f"Polygon shows AAPL trading (${ppx:.2f}, "
+                                         f"{age:.0f}s ago) but IBKR returned NO price. "
+                                         f"The IBKR feed may be frozen or logged out - "
+                                         f"the engines could be trading blind.")
+                            elif abs(ibx / ppx - 1) > 0.005:
+                                problems.append(
+                                    f"feed divergence AAPL ibkr={ibx} poly={ppx}")
+                                al.alert("feed_diverge", "IBKR fleet: DATA FEEDS DISAGREE",
+                                         f"AAPL: IBKR ${ibx:.2f} vs Polygon ${ppx:.2f} "
+                                         f"({(ibx / ppx - 1) * 100:+.2f}%). One tape is "
+                                         f"stale - engine prices may be wrong.")
+                            else:
+                                for sym, q in positions:
+                                    if q <= 0:
+                                        continue
+                                    hp, ha = polygon.last_trade(sym)
+                                    hx = _ibkr_last(broker, sym)
+                                    if hp and ha is not None and ha < 60 and hx \
+                                            and abs(hx / hp - 1) > 0.05:
+                                        problems.append(f"feed divergence {sym}")
+                                        al.alert(f"feed_{sym}",
+                                                 f"IBKR fleet: {sym} price differs",
+                                                 f"Held {sym}: IBKR ${hx:.4f} vs Polygon "
+                                                 f"${hp:.4f} while actively trading. The "
+                                                 f"ladder may be working stale prices.")
+            except Exception:
+                log.debug("polygon cross-check failed", exc_info=True)
 
             # ---- 6. anything held after the close? ------------------------
             if now.weekday() < 5 and now.time() >= dt.time(16, 5) and positions:

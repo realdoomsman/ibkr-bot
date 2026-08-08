@@ -82,3 +82,5 @@ migrate/ibkr_update.zip
 
 # SmallCapLab data (their data, keep internal - no redistribution)
 smallcaplab_data/
+polygon_key.txt
+spreadcheck.csv

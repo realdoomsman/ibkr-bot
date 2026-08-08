@@ -1,0 +1,12 @@
+# Core dependencies for the IBKR trading bot
+# Requires Python 3.10+ (3.11-3.13 recommended)
+ib_async>=2.1.0        # Community-maintained IBKR API wrapper (successor to ib_insync)
+pandas>=2.0
+numpy>=1.26
+PyYAML>=6.0
+yfinance>=1.0          # Free daily bars from Yahoo Finance for backtesting
+matplotlib>=3.8        # Charts for the HTML comparison report
+
+# Optional: AI market analysis module (bot/ai_analyst.py)
+# Only needed if you set ANTHROPIC_API_KEY
+anthropic>=0.40

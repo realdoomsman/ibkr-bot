@@ -1,0 +1,35 @@
+# =====================================================================
+# PRE-REGISTERED EVALUATION GATE CRITERIA
+# Written: 2026-08-07, BEFORE any of the evidence window's data existed.
+# DO NOT EDIT BETWEEN GATES. Criteria edited after seeing results are
+# not criteria - they are excuses (Bailey/Lopez de Prado; RESEARCH.md).
+# =====================================================================
+
+evidence_window:
+  start: 2026-08-10          # first Monday of clean, watched operation
+  first_gate: 2026-09-04
+
+# A sleeve earns a capital increase (or survives) only if:
+sleeve_promotion:
+  min_round_trips: 100       # below this, win rates are noise
+  min_net_pnl_usd: 0         # must be net positive AFTER the window's costs
+  max_process_error_share: 0.05   # <5% of trips tainted by bot errors
+
+# The ML filter earns VETO power (from advisory) only if:
+filter_promotion:
+  min_scored_trips: 100
+  min_trading_days: 20
+  requires_take_gated_beats_actual: true    # cumulative, on the ledger
+  requires_skip_bucket_negative: true       # its vetoes must be the bad ones
+
+# The Penny Brain earns gating of radar picks only if:
+brain_promotion:
+  min_resolved_predictions: 60
+  keeps_group_must_beat_fades_by_pct: 3.0   # avg day-5 spread
+
+# Real-money discussion is ON THE TABLE (not automatic) only if ALL:
+live_money_discussion:
+  min_total_round_trips: 300
+  min_sleeves_passing_promotion: 1
+  max_blackout_days_in_window: 0     # a single silent day disqualifies ops
+  requires_realtime_data_weeks: 2    # no live talk on delayed data

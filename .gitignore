@@ -1,0 +1,77 @@
+# Environments and caches - rebuilt, never versioned
+.venv/
+venv/
+__pycache__/
+*.pyc
+data_cache/
+data_archive/
+.pytest_cache/
+KILL_SWITCH
+
+# Live trading STATE - each machine's records are its own truth.
+# Versioning these would let a git pull overwrite the VM's live journal.
+journal.csv
+trades_history.csv
+equity_history.csv
+equity_*.csv
+pennymo_state.json
+pennymo_state.json.corrupt
+penny_radar.csv
+penny_predictions.csv
+filter_scoreboard.csv
+filter_trades.csv
+lab_ledger.csv
+news_seen.json
+news_extra.txt
+health.json
+watchdog_state.json
+heartbeat_*.txt
+screen_results.csv
+screens_archive/
+eventstudy_results.csv
+exitlab_results.csv
+
+# Logs and generated reports
+*.log
+latest_review.txt
+latest_lab.txt
+reviews.log
+pennybrain_report.txt
+gate_report.txt
+report.html
+
+# Local secrets/config that must never leave the machine
+alerts.yaml
+.env
+
+# Scratch outputs from interactive sessions
+*_out.txt
+*_test.txt
+cycle_output.txt
+intraday_test.txt
+t1.txt
+t2.txt
+v1.txt
+v2.txt
+v3.txt
+p1.txt
+p2.txt
+f1.txt
+f2.txt
+g1.txt
+g2.txt
+h1.txt
+h2.txt
+j1.txt
+k1.txt
+w1.txt
+z1.txt
+d1.txt
+es1.txt
+es2.txt
+ex1.txt
+r1.txt
+
+# Deploy artifacts
+migrate/ibkr_bundle.zip
+migrate/ibkr_update.zip

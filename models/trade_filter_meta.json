@@ -1,0 +1,99 @@
+{
+  "trained": "2026-08-04T19:22:35",
+  "symbols": [
+    "TE",
+    "EOSE",
+    "ONDS",
+    "OPEN",
+    "KEEL",
+    "PLUG",
+    "AAL",
+    "SOFI",
+    "NU",
+    "NOK",
+    "PATH",
+    "F",
+    "JBLU",
+    "SNAP",
+    "GRAB",
+    "AMC"
+  ],
+  "features": [
+    "sig_macd_cross",
+    "sig_rsi_reversion",
+    "sig_bollinger_breakout",
+    "sig_golden_cross",
+    "sig_donchian_breakout",
+    "vol_20d",
+    "ret_5d",
+    "ret_21d",
+    "dist_sma50"
+  ],
+  "feature_set": "base",
+  "ablation_basis": "AUC over all OOS days (EV cells too thin to trust)",
+  "ablation": {
+    "base": {
+      "auc": 0.5082,
+      "take05_ev_pct": 1.4563055035827088,
+      "take05_n": 130
+    },
+    "expanded": {
+      "auc": 0.5065,
+      "take05_ev_pct": 0.28407350245194646,
+      "take05_n": 319
+    }
+  },
+  "take_threshold": 0.5,
+  "skip_threshold": 0.35,
+  "threshold_table": [
+    {
+      "thr": 0.4,
+      "n": 805,
+      "ev_pct": 0.0453
+    },
+    {
+      "thr": 0.45,
+      "n": 307,
+      "ev_pct": 0.067
+    },
+    {
+      "thr": 0.5,
+      "n": 130,
+      "ev_pct": 1.4563
+    },
+    {
+      "thr": 0.55,
+      "n": 56,
+      "ev_pct": 1.8713
+    },
+    {
+      "thr": 0.6,
+      "n": 34,
+      "ev_pct": 1.2183
+    },
+    {
+      "thr": 0.65,
+      "n": 16,
+      "ev_pct": 3.665
+    },
+    {
+      "thr": 0.7,
+      "n": 7,
+      "ev_pct": 4.9128
+    }
+  ],
+  "samples": 18871,
+  "unique_dates": 1185,
+  "per_fold_baseline_ev_pct": [
+    -0.1913,
+    0.1481,
+    0.1548,
+    0.7476,
+    -0.2935
+  ],
+  "oos_baseline_ev_pct": 0.1119,
+  "oos_take05_ev_pct": 1.4563,
+  "horizon": 10,
+  "universe_selection": "survivorship-biased (chosen on CURRENT liquidity; delisted/faded names structurally absent)",
+  "caveats": "label-level EVs, no costs; gap-through fills modeled at the exit-day open; effective sample size far below row count"
+}

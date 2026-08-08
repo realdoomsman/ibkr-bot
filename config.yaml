@@ -1,0 +1,67 @@
+# ============================================================
+# Trading bot configuration
+# ============================================================
+# mode: "paper" is the ONLY mode you should use until you have
+# months of consistent paper results. Live trading additionally
+# requires the environment variable I_UNDERSTAND_LIVE_TRADING_RISKS=yes
+mode: paper
+
+ib:
+  host: 127.0.0.1
+  # 7497 = TWS paper trading (default)
+  # 7496 = TWS LIVE trading      (blocked unless you opt in via env var)
+  # 4002 = IB Gateway paper
+  # 4001 = IB Gateway LIVE       (blocked unless you opt in via env var)
+  port: 7497
+  client_id: 42
+
+strategy:
+  # Available: sma_cross, rsi_reversion, momentum (see bot/strategy.py)
+  name: sma_cross
+  # High-percent-movers basket, per user request (no index ETFs). Picked
+  # MECHANICALLY: top 3 by annualized volatility among screen results with
+  # price <= $20 and $-volume >= $100M/day, excluding the intraday basket.
+  symbols: [TE, EOSE, ONDS]
+  history_days: 400    # daily bars fetched for signals (enough for a 200d SMA)
+  params:              # strategy-specific parameters
+    fast: 20
+    slow: 50
+
+risk:
+  capital_base: 20000         # practice at the REAL planned deployment size
+                              # (user plans $10-30k live; positions and loss
+                              # limits size off this, not the $1M paper balance)
+  max_position_pct: 0.20      # AGGRESSIVE: 20% of capital per position (= $4,000)
+  max_open_positions: 10      # 4 daily + 4 intraday + SPY/QQQ time-of-day sleeves
+  max_daily_loss_pct: 0       # 0 = daily-loss breaker DISABLED (user choice).
+                              # Standard practice is 2-5%; revisit before any
+                              # live deployment.
+  max_daily_gain_pct: 0.10    # PROFIT LOCKOUT (user directive 2026-08-05):
+                              # once the day is up 10% of capital ($2,000),
+                              # no new entries until tomorrow. Quit while ahead.
+
+intraday:
+  # Continuous session engine (run_intraday.py) - scans every few minutes
+  # during market hours. Uses ITS OWN symbols so it never fights the daily
+  # bot. Positions are flattened before the close (no overnight risk).
+  enabled: true
+  # Low-priced/high-volume experiment basket - picked MECHANICALLY from
+  # screen_results.csv (top 3 by dollar volume with price < $5). The daily
+  # bot's big caps are the control group for comparison. Expect violence:
+  # these names whipsaw hard, and the daily-loss breaker will matter.
+  # AMC dropped 2026-08-04 per evidence sweep (0/9 profitable OOS windows on
+  # every strategy; -99% underlying). PLUG = next most-liquid sub-$5 name
+  # from screen_results.csv, mechanically.
+  symbols: [OPEN, KEEL, PLUG]
+  strategy: sma_cross
+  params:
+    fast: 20                  # 20 x 5min bars = 100 minutes
+    slow: 60                  # 60 x 5min bars = 5 hours
+  bar_size: "5 mins"
+  scan_minutes: 5
+  flatten_at_close: true      # exits via Market-on-Close (closing auction)
+  max_trades_per_day: 30      # hard cap - a runaway loop can't churn past this
+  atr_stop_mult: 2.0          # UNUSED since 2026-08-04: protective stops removed
+                              # by user directive ("no stop losses"). Kept so the
+                              # setting survives if that decision is revisited at
+                              # a monthly evaluation gate.

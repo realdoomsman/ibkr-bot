@@ -1,0 +1,11 @@
+﻿Research Lab 2026-08-04 - running: event_study
+
+RESEARCH LAB  2026-08-04  (event_study)
+============================================================
+EVENT STUDY - 27 spike entries, 15 symbols (universe 19)
+  net avg -15.80% | median -36.66% | winners 37% | bags 67% (tranche -57.6%)
+
+The lab reports; it never changes config. Strategy decisions
+happen at monthly evaluation gates, by a human, from this ledger.
+
+-> lab_ledger.csv (event_study row for 2026-08-04) + latest_lab.txt

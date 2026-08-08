@@ -74,9 +74,12 @@ class Broker:
         ib_cfg = self.cfg.ib
         log.info("Connecting to IBKR at %s:%s (clientId=%s)", ib_cfg.host, ib_cfg.port, ib_cfg.client_id)
         self.ib.connect(ib_cfg.host, ib_cfg.port, clientId=ib_cfg.client_id, timeout=15)
-        # 3 = delayed data - free, fine for daily-bar strategies. Real-time
-        # streaming quotes require paid market-data subscriptions.
-        self.ib.reqMarketDataType(3)
+        # Config-driven: 3 = delayed (free), 1 = real-time (paid subscription
+        # + paper sharing required - see IBConfig.market_data_type).
+        mdt = getattr(ib_cfg, "market_data_type", 3) or 3
+        self.ib.reqMarketDataType(mdt)
+        if mdt == 1:
+            log.info("REAL-TIME market data requested (subscription mode)")
         accounts = self.ib.managedAccounts()
         log.info("Connected. Accounts: %s", accounts)
         # Paper account ids start with 'D' at IBKR. The port check in config.py

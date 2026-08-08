@@ -42,6 +42,11 @@ class IBConfig:
     host: str = "127.0.0.1"
     port: int = 7497
     client_id: int = 42
+    #: 3 = delayed (~15 min, free). 1 = REAL-TIME - requires the US Securities
+    #: Snapshot and Futures Value Bundle subscription AND paper-account data
+    #: sharing enabled in Client Portal. Flip to 1 only after both are active,
+    #: or market-data requests fail instead of silently degrading.
+    market_data_type: int = 3
 
 
 @dataclass

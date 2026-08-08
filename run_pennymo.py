@@ -99,6 +99,20 @@ DILUTION: dict[str, str] = {}
 RADAR_STATS: dict[str, tuple] = {}
 #: CIK -> symbol map for the EDGAR tripwire (built lazily as symbols appear)
 CIKS: dict[str, str] = {}
+#: symbol -> (date, premarket high) cache - one extended-hours fetch per day
+PM_HIGHS: dict[str, tuple] = {}
+
+
+def pm_high_today(broker: Broker, symbol: str) -> float | None:
+    today = dt.date.today().isoformat()
+    cached = PM_HIGHS.get(symbol)
+    if cached and cached[0] == today:
+        return cached[1]
+    from bot.scanner import premarket_high
+
+    v = premarket_high(broker.ib, symbol)
+    PM_HIGHS[symbol] = (today, v)
+    return v
 
 
 def notify(title: str, msg: str) -> None:
@@ -757,6 +771,24 @@ def main() -> None:
                     elif entry_ok:
                         last = entry_price(bars)
                         if last is not None:
+                            # PREMARKET-HIGH BREAK FILTER (evidence-based edit,
+                            # 2026-08-08, from 1,506 real gapper replays):
+                            # movers that broke their PM high were ~breakeven
+                            # with an 83% win rate; those below it were -11.6%
+                            # with 49%. Waiting for the break skips the losing
+                            # cohort - and does NOT consume the one-attempt-
+                            # per-day (the break may come later). Fail-open
+                            # when the PM high is unavailable.
+                            pmh = None
+                            try:
+                                pmh = pm_high_today(broker, symbol)
+                            except Exception:
+                                pass
+                            if pmh is not None and last <= pmh:
+                                log.info("%s: mover but BELOW premarket high "
+                                         "(%.2f <= %.2f) - waiting for the "
+                                         "break", symbol, last, pmh)
+                                continue
                             rv, sp = None, None
                             try:
                                 # RVOL (logged, not gated) + EDGE spread

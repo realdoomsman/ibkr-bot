@@ -1,0 +1,76 @@
+﻿BASE RATES on 3349 real gapper events (vs SmallCapLab published):
+  close below open:  67.5%   (theirs ~64.1%)
+  close below VWAP:  73.4%   (theirs ~72.5%)
+  median HOD move:   +15.4%   (theirs ~31.9%)
+  broke PM high:     41.2%   (theirs ~41.4%)
+  (within a few points = our understanding of the tape is sound)
+
+LADDER REPLAY on 1506 qualifying events (>=+12% intraday, $0.2-7.0):
+  reached +8% rung:   69%
+  reached +15% rung:  54%
+  breakeven-floor exits: 69%
+  NET per clip (after 2% friction): avg -4.44%, median +5.67%, winners 70%
+  gross (frictionless): avg -2.44%
+  CAVEAT: curated gapper set, not the live radar universe; long-only
+  on a tape whose documented edge is SHORT. Directional prior only.
+
+RUNG SWEEP on the same real spikes (pre-registered grid; no stops):
+  +5%/+10%: net avg  -3.78% | median  +3.00% | win 64% | r1hit 78%
+  +8%/+15%: net avg  -4.44% | median  +5.67% | win 70% | r1hit 69%
+  +10%/+20%: net avg  -4.67% | median  +1.33% | win 65% | r1hit 64%
+  +8%/+25%: net avg  -3.88% | median  +0.67% | win 70% | r1hit 69%
+  +12%/+30%: net avg  -5.05% | median  +2.00% | win 61% | r1hit 59%
+  +15%/+40%: net avg  -5.56% | median  +3.00% | win 56% | r1hit 54%
+  (higher win rate + higher median often means MORE negative avg -
+   banking earlier caps upside while the no-stop tail is unchanged.)
+
+ENTRY-FILTER SEARCH - does any condition flip the ladder POSITIVE?
+  (real spikes; no stops added; * = net-positive subgroup)
+  ALL (baseline)             n=1506  net avg  -4.44%  median  +5.67%  win 70%
+  broke PM high              n= 929  net avg  +0.00%  median  +5.67%  win 83% *
+  did NOT break PMH          n= 577  net avg -11.61%  median  -2.34%  win 49%
+  gap 30-60%                 n= 807  net avg  -3.74%  median  +5.67%  win 68%
+  gap >=60%                  n= 699  net avg  -5.25%  median  +5.67%  win 72%
+  PM $vol >= $5M             n=1409  net avg  -4.66%  median  +5.67%  win 70%
+  PM $vol >= $20M            n=1099  net avg  -5.34%  median  +5.67%  win 68%
+  broke PMH AND PM$vol>=5M   n= 854  net avg  -0.05%  median  +5.67%  win 84%
+  -> a net-positive subgroup with enough n is a REAL entry filter
+     (candidate for the gate; * marks it). None = entry stays hard.
+
+RUNNER ANALYSIS (3920 intraday runners - the moon-bag thesis):
+  crossed +100% intraday: 23%   +150%: 10%
+  median HOD extension from open: +70%
+  of runners, 5% reached +200%+ (the true 3x)
+  OVERNIGHT (next-open vs RTH close - what the EOD flatten skips):
+    avg +2.2%, median -2.8%, positive 37%  (n=3460)
+    -> negative/near-zero median = the flatten AVOIDS a bad hold, not
+       forfeits a good one; Gate E's overnight null holds up.
+
+REGIME (1015 days - the hot/cold-tape throttle):
+  gapper-count lag-1 autocorrelation: 0.45  (>=0.25 means counts PERSIST -> a throttle can work; research said ~0.43)
+  hot days (top quartile): 6 gappers, fade 62%, avg HOD +32%
+  cold days (bottom quartile): 1.5 gappers, fade 65%
+  -> if counts persist, a pre-market gapper count throttles position
+     count/size for the day (pre-registered gate, advisory first).
+
+HOD TIMING (for the ENTRY_CUTOFF gate - late entries buy after the high):
+  HOD set by 10:00: 60%   by 10:30: 69%   by 11:30: 78%   by 13:00: 85%
+  -> most highs are in early; the 15:00 cutoff lets it buy late fades.
+.venv\Scripts\python.exe : Traceback (most recent call last):
+At line:1 char:474
++ ... ct -Last 1; .venv\Scripts\python.exe run_gapperlab.py > gapperlab_rep ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Traceback (most recent call last)::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  File "C:\tech\ibkr\run_gapperlab.py", line 278, in <module>
+    main()
+  File "C:\tech\ibkr\run_gapperlab.py", line 273, in main
+    Path("gapperlab_report.txt").write_text(report + "\n", encoding="utf-8")
+  File "C:\Users\Dooms\AppData\Local\Programs\Python\Python312\Lib\pathlib.py", line 1047, in write_text
+    with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Dooms\AppData\Local\Programs\Python\Python312\Lib\pathlib.py", line 1013, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+PermissionError: [Errno 13] Permission denied: 'gapperlab_report.txt'

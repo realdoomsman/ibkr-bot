@@ -197,6 +197,55 @@ def regime_analysis() -> list[str]:
     ]
 
 
+def entry_filters(df: pd.DataFrame) -> list[str]:
+    """THE money question: does any ENTRY condition flip the ladder positive?
+    If yes, that condition becomes a real (directive-compatible) entry filter -
+    an actual bot edit, not just analysis. Tests are on the SAME real spikes."""
+    d = df[(df["open"] >= MIN_PRICE) & (df["open"] <= MAX_PRICE)].copy()
+    entry = d["open"] * (1 + ENTRY_GAIN) * (1 + CAP)
+    trig = d["high"] >= entry
+    d, entry = d[trig].copy(), entry[trig]
+
+    def ladder_net(sub, e):
+        hi, lo, close = sub["high"], sub["low"], sub["close"]
+        h1, h2 = hi >= e * RUNGS[0], hi >= e * RUNGS[1]
+        proc = np.where(h1, RUNG_FRAC * RUNGS[0], 0) + np.where(h2, RUNG_FRAC * RUNGS[1], 0)
+        rem = 1.0 - RUNG_FRAC * (h1.astype(int) + h2.astype(int))
+        floor = h1 & (lo <= e)
+        exit_px = np.where(floor, e, close)
+        return np.maximum(proc + rem * (exit_px / e) - 1 - COST_PCT, -1.0)
+
+    d["_net"] = ladder_net(d, entry)
+    d["_broke_pmh"] = d["high"] > d["pm_high"]
+    d["_gap"] = d["gap_pct"]
+    d["_pmdv"] = pd.to_numeric(d["pm_dollar_volume"], errors="coerce")
+
+    conds = {
+        "ALL (baseline)": pd.Series(True, index=d.index),
+        "broke PM high": d["_broke_pmh"],
+        "did NOT break PMH": ~d["_broke_pmh"],
+        "gap 12-30%": (d["_gap"] >= 12) & (d["_gap"] < 30),
+        "gap 30-60%": (d["_gap"] >= 30) & (d["_gap"] < 60),
+        "gap >=60%": d["_gap"] >= 60,
+        "PM $vol >= $5M": d["_pmdv"] >= 5e6,
+        "PM $vol >= $20M": d["_pmdv"] >= 20e6,
+        "broke PMH AND PM$vol>=5M": d["_broke_pmh"] & (d["_pmdv"] >= 5e6),
+        "broke PMH AND gap<30%": d["_broke_pmh"] & (d["_gap"] < 30),
+    }
+    rows = ["ENTRY-FILTER SEARCH - does any condition flip the ladder POSITIVE?",
+            "  (real spikes; no stops added; * = net-positive subgroup)"]
+    for name, mask in conds.items():
+        s = d.loc[mask, "_net"]
+        if len(s) < 40:
+            continue
+        star = " *" if s.mean() > 0 else ""
+        rows.append(f"  {name:<26} n={len(s):>4}  net avg {100*s.mean():+6.2f}%  "
+                    f"median {100*s.median():+6.2f}%  win {100*(s>0).mean():.0f}%{star}")
+    rows.append("  -> a net-positive subgroup with enough n is a REAL entry filter")
+    rows.append("     (candidate for the gate; * marks it). None = entry stays hard.")
+    return rows
+
+
 def hod_timing(df: pd.DataFrame) -> list[str]:
     t = pd.to_datetime(df["high_time"], format="%H:%M", errors="coerce").dt.time
     def frac_by(hh, mm):
@@ -217,8 +266,8 @@ def main() -> None:
         return
     df = load()
     out = (base_rates(df) + [""] + replay_ladder(df) + [""] + rung_sweep(df)
-           + [""] + runner_analysis() + [""] + regime_analysis()
-           + [""] + hod_timing(df))
+           + [""] + entry_filters(df) + [""] + runner_analysis()
+           + [""] + regime_analysis() + [""] + hod_timing(df))
     report = "\n".join(out)
     print(report)
     Path("gapperlab_report.txt").write_text(report + "\n", encoding="utf-8")

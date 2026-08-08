@@ -22,6 +22,8 @@ import logging
 import time
 from pathlib import Path
 
+import pandas as pd
+
 log = logging.getLogger("bot.scanner")
 
 # Cumulative fraction of a normal day's volume completed by each half-hour
@@ -107,6 +109,39 @@ def split_mismatch(yahoo_close: float, raw_prior_close: float,
     if not yahoo_close or not raw_prior_close or yahoo_close <= 0:
         return False
     return abs(yahoo_close / raw_prior_close - 1) > tol
+
+
+def premarket_high(ib, symbol: str) -> float | None:
+    """Today's premarket high (04:00-09:30 ET) from IBKR extended-hours bars.
+
+    The single strongest entry filter found in 1,506 real gapper events: movers
+    that BREAK their premarket high are ~breakeven with an 83%% win rate; those
+    that fail to are -11.6%% with a coin-flip win rate. Breaking the PM high =
+    real demand confirming the move. Returns None if unavailable (fail-open -
+    a missing PM high must not block trading)."""
+    try:
+        import datetime as _dt
+        from zoneinfo import ZoneInfo
+
+        from ib_async import Stock, util
+
+        contract = Stock(symbol, "SMART", "USD")
+        ib.qualifyContracts(contract)
+        bars = ib.reqHistoricalData(
+            contract, endDateTime="", durationStr="1 D",
+            barSizeSetting="5 mins", whatToShow="TRADES",
+            useRTH=False, formatDate=1,   # <-- extended hours INCLUDED
+        )
+        if not bars:
+            return None
+        df = util.df(bars)
+        df["date"] = pd.to_datetime(df["date"])
+        today = _dt.datetime.now(ZoneInfo("America/New_York")).date()
+        pm = df[[t.date() == today and t.time() < _dt.time(9, 30) for t in df["date"]]]
+        return round(float(pm["high"].max()), 4) if len(pm) else None
+    except Exception:
+        log.debug("premarket_high failed for %s", symbol, exc_info=True)
+        return None
 
 
 def enrich_symbol(symbol: str) -> dict:

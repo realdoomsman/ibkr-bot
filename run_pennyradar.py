@@ -34,7 +34,8 @@ MAX_PRICE = 5.0
 MIN_DVOL_M = 1.0          # watch-only floor - deliberately tiny
 TOP_N = 8
 COLS = ["date", "symbol", "captured", "price", "dollar_vol_m", "ann_vol", "best_day",
-        "mom_1m", "max_dd_2y", "sec_flags", "fwd_1d", "fwd_5d", "fwd_20d", "status"]
+        "mom_1m", "max_dd_2y", "float_m", "ipo_months", "sec_flags",
+        "fwd_1d", "fwd_5d", "fwd_20d", "status"]
 
 
 def save_radar(radar: pd.DataFrame) -> None:
@@ -94,10 +95,17 @@ def capture_today(radar: pd.DataFrame, extra: list[str]) -> pd.DataFrame:
             sec_flags = dilution_flags(row["symbol"])
         except Exception:
             sec_flags = ""
+        try:
+            from bot.scanner import enrich_symbol
+
+            en = enrich_symbol(row["symbol"])
+        except Exception:
+            en = {}
         pick = {
             "date": today, "symbol": row["symbol"],
             "captured": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
             "sec_flags": sec_flags,
+            "float_m": en.get("float_m"), "ipo_months": en.get("ipo_months"),
             "price": round(row["price"], 4),
             "dollar_vol_m": round(row["dollar_vol_m"], 2),
             "ann_vol": round(row["ann_vol"], 1),

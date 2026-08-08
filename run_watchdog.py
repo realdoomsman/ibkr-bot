@@ -222,6 +222,21 @@ def main() -> None:
                          f"until handled - run flatten_now.py in market hours "
                          f"or sell manually.")
 
+            # ---- 5b. held symbol HALTED? exits can't fill until resume ----
+            try:
+                from bot.halts import todays_halts
+
+                halted_held = [s for s, _ in positions
+                               if (h := todays_halts().get(s)) and not h["resumed"]]
+                if halted_held:
+                    problems.append(f"HALTED while held: {halted_held}")
+                    al.alert("halt_held", "IBKR fleet: held symbol HALTED",
+                             f"{halted_held} halted mid-hold - no exit can fill "
+                             f"until it resumes; if near the close this can force "
+                             f"an overnight hold.")
+            except Exception:
+                pass
+
             # ---- 6. anything held after the close? ------------------------
             if now.weekday() < 5 and now.time() >= dt.time(16, 5) and positions:
                 problems.append("positions past the close")

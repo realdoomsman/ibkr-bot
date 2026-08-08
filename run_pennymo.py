@@ -95,6 +95,8 @@ EXCLUDE: set[str] = {"SPY", "QQQ"}
 SKIP_DILUTION_FLAGS = True
 #: symbol -> sec_flags string, refreshed from penny_radar.csv each scan
 DILUTION: dict[str, str] = {}
+#: symbol -> (price, dollar_vol_m) from the radar - feeds the RVOL estimate
+RADAR_STATS: dict[str, tuple] = {}
 
 
 # ---- ladder state (survives restarts and crashes) --------------------------
@@ -148,6 +150,10 @@ def watchlist(state: dict) -> list[str]:
             flags = str(r.get("sec_flags") or "")
             if flags and flags != "nan":
                 DILUTION[s] = flags
+            try:
+                RADAR_STATS[s] = (float(r["price"]), float(r["dollar_vol_m"]))
+            except (TypeError, ValueError, KeyError):
+                pass
             if s not in watch and s not in EXCLUDE \
                     and MIN_PRICE <= float(r["price"]) <= MAX_PRICE \
                     and float(r["dollar_vol_m"]) >= MIN_DVOL_M:
@@ -415,11 +421,25 @@ def flatten_all(state: dict, broker: Broker, risk: RiskManager) -> bool:
     return clean
 
 
-def try_enter(symbol: str, state: dict, broker: Broker, risk: RiskManager, last: float) -> bool:
+def try_enter(symbol: str, state: dict, broker: Broker, risk: RiskManager,
+              last: float, rvol: float | None = None) -> bool:
     today = dt.date.today().isoformat()
     entered_today = state["entered"].setdefault(today, [])
     if symbol in EXCLUDE or symbol in entered_today or symbol in state["pending"]:
         return False  # one attempt per symbol per day - never re-chase a fade
+    try:
+        # Halted names: exits can't fill until resume, and news-halts resume
+        # violently. The free NASDAQ feed makes this checkable (Gap 7).
+        from bot.halts import halt_block_reason
+
+        hb = halt_block_reason(symbol)
+        if hb:
+            log.warning("%s: SKIPPING entry - %s", symbol, hb)
+            journal(symbol, "BUY", "blocked_entry", signal_price=last,
+                    note=f"[penny] halt: {hb[:70]}")
+            return False
+    except Exception:
+        pass
     if len(entered_today) >= MAX_NEW_PER_DAY or len(state["positions"]) >= MAX_OPEN:
         return False
     try:
@@ -470,8 +490,8 @@ def try_enter(symbol: str, state: dict, broker: Broker, risk: RiskManager, last:
     state["positions"][symbol] = new_ladder(today, entry_px, got)
     save_state(state)
     journal(symbol, "BUY", "penny_entry", qty=qty, filled=got, signal_price=last,
-            note=f"[penny] ladder: +50%/+100% thirds, moon bag trail {int(TRAIL * 100)}%, "
-                 f"NO stop (user directive)")
+            note=f"[penny] jeet ladder +8/+15, trail {int(TRAIL * 100)}%, floor on, "
+                 f"rvol={rvol if rvol is not None else '?'}")  # rvol LOGGED, not gated
     return True
 
 
@@ -607,7 +627,24 @@ def main() -> None:
                     elif entry_ok:
                         last = entry_price(bars)
                         if last is not None:
-                            try_enter(symbol, state, broker, risk, last)
+                            rv = None
+                            try:
+                                # RVOL: is this mover ACTUALLY in play, or
+                                # just up? Logged with every entry so the
+                                # gate can decide if it becomes a filter.
+                                from zoneinfo import ZoneInfo
+
+                                from bot.scanner import rvol_estimate
+
+                                pr, dv = RADAR_STATS.get(symbol, (None, None))
+                                if pr and dv:
+                                    rv = rvol_estimate(
+                                        float(todays_bars(bars)["volume"].sum()),
+                                        dv * 1e6 / pr,
+                                        dt.datetime.now(ZoneInfo("America/New_York")))
+                            except Exception:
+                                pass
+                            try_enter(symbol, state, broker, risk, last, rvol=rv)
                 except Exception:
                     log.exception("Scan error on %s - continuing", symbol)
             save_state(state)

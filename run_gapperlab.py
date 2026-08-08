@@ -109,6 +109,35 @@ def replay_ladder(df: pd.DataFrame) -> list[str]:
     ]
 
 
+def rung_sweep(df: pd.DataFrame) -> list[str]:
+    """Which rung levels do best on the SAME 1,506 real spikes? Pre-registered
+    grid (declared here before reading results); reports net avg + win rate +
+    median so the median-vs-mean skew is visible per cell. NO stop is added -
+    every variant honors the EOD-flatten-only, no-intraday-stop rule."""
+    d = df[(df["open"] >= MIN_PRICE) & (df["open"] <= MAX_PRICE)].copy()
+    base_entry = d["open"] * (1 + ENTRY_GAIN) * (1 + CAP)
+    trig = d["high"] >= base_entry
+    d = d[trig]
+    hi, lo, close, entry = d["high"], d["low"], d["close"], base_entry[trig]
+    grid = [(0.05, 0.10), (0.08, 0.15), (0.10, 0.20), (0.08, 0.25),
+            (0.12, 0.30), (0.15, 0.40)]
+    rows = ["RUNG SWEEP on the same real spikes (pre-registered grid; no stops):"]
+    for r1, r2 in grid:
+        h1, h2 = hi >= entry * (1 + r1), hi >= entry * (1 + r2)
+        proceeds = np.where(h1, RUNG_FRAC * (1 + r1), 0.0) \
+            + np.where(h2, RUNG_FRAC * (1 + r2), 0.0)
+        remaining = 1.0 - RUNG_FRAC * (h1.astype(int) + h2.astype(int))
+        floor = h1 & (lo <= entry)
+        exit_px = np.where(floor, entry, close)
+        net = np.maximum(proceeds + remaining * (exit_px / entry) - 1 - COST_PCT, -1.0)
+        rows.append(f"  +{int(r1*100)}%/+{int(r2*100)}%: net avg {100*net.mean():+6.2f}% "
+                    f"| median {100*np.median(net):+6.2f}% | win {100*(net>0).mean():.0f}% "
+                    f"| r1hit {100*h1.mean():.0f}%")
+    rows.append("  (higher win rate + higher median often means MORE negative avg -")
+    rows.append("   banking earlier caps upside while the no-stop tail is unchanged.)")
+    return rows
+
+
 def hod_timing(df: pd.DataFrame) -> list[str]:
     t = pd.to_datetime(df["high_time"], format="%H:%M", errors="coerce").dt.time
     def frac_by(hh, mm):
@@ -128,7 +157,8 @@ def main() -> None:
         print(f"Missing {CSV} - drop the SmallCapLab gapper export there.")
         return
     df = load()
-    out = base_rates(df) + [""] + replay_ladder(df) + [""] + hod_timing(df)
+    out = (base_rates(df) + [""] + replay_ladder(df) + [""] + rung_sweep(df)
+           + [""] + hod_timing(df))
     report = "\n".join(out)
     print(report)
     Path("gapperlab_report.txt").write_text(report + "\n", encoding="utf-8")

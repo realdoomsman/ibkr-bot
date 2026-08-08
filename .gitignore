@@ -75,3 +75,5 @@ r1.txt
 # Deploy artifacts
 migrate/ibkr_bundle.zip
 migrate/ibkr_update.zip
+
+.claude/

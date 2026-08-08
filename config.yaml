@@ -14,9 +14,9 @@ ib:
   # 4001 = IB Gateway LIVE       (blocked unless you opt in via env var)
   port: 7497
   client_id: 42
-  market_data_type: 3   # 3 = delayed. FLIP TO 1 once the US Value Bundle
-                        # subscription is ACTIVE and paper-sharing is ON -
-                        # the single biggest data upgrade available.
+  market_data_type: 1   # 1 = REAL-TIME (US Value Bundle subscribed
+                        # 2026-08-07). If data errors appear, flip back to 3
+                        # (delayed) and check subscription + paper sharing.
 
 strategy:
   # Available: sma_cross, rsi_reversion, momentum (see bot/strategy.py)

@@ -68,10 +68,27 @@ def capture_today(radar: pd.DataFrame, extra: list[str]) -> pd.DataFrame:
         pool = []
     from bot.config import BLOCKED_SYMBOLS
 
+    tox = None
+    try:
+        from bot.toxicity import block_reason as _tox_block
+        from bot.toxicity import load as _tox_load
+
+        tox = _tox_load()
+    except Exception:
+        pass
+
     scored = []
     for sym in list(dict.fromkeys([s.upper() for s in extra] + pool))[:70]:
         if sym in BLOCKED_SYMBOLS:
             continue  # no ETFs, no gambling stocks (user directives 2026-08-05)
+        if tox is not None:
+            try:
+                why = _tox_block(sym, tox)
+                if why:
+                    log.info("RADAR skip %s: %s", sym, why)
+                    continue
+            except Exception:
+                pass
         row = score_symbol(sym)
         if row is None:
             if sym in extra:

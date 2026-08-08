@@ -59,6 +59,51 @@ def rvol_estimate(cum_volume_today: float, avg_daily_volume: float,
     return round(cum_volume_today / expected, 2)
 
 
+def edge_spread_pct(bars) -> float | None:
+    """Effective spread %% from OHLC candles alone (Ardia-Guidotti-Kroencke
+    EDGE estimator, J. Financial Economics 2024; `bidask` package, verified
+    in-venv: recovers a synthetic 1%% spread as 1.06%%±0.02%%).
+
+    This is the system's largest previously-unmeasured cost: a 1.5%% spread
+    consumes a fifth of the ladder's +8%% first rung. ADVISORY tiers derived
+    from the ladder's expectancy math: <=0.75%% full clip, <=1.5%% half,
+    >1.5%% reject. Journaled per entry; gating decided at a gate."""
+    try:
+        from bidask import edge
+
+        if bars is None or len(bars) < 60:
+            return None
+        s = edge(bars["open"], bars["high"], bars["low"], bars["close"], sign=False)
+        if s != s:  # NaN
+            return None
+        return round(100 * float(s), 3)
+    except Exception:
+        log.debug("edge spread failed", exc_info=True)
+        return None
+
+
+def spread_tier(spread_pct: float | None) -> str:
+    if spread_pct is None:
+        return "unknown"
+    if spread_pct <= 0.75:
+        return "full"
+    if spread_pct <= 1.5:
+        return "half"
+    return "reject"
+
+
+def split_mismatch(yahoo_close: float, raw_prior_close: float,
+                   tol: float = 0.05) -> bool:
+    """True when adjusted (Yahoo) and raw (IBKR) prior closes disagree badly -
+    the corporate-action fingerprint. A forensic teardown showed this exact
+    adjusted-vs-raw join minting 63%% of a backtest's profit; in penny-land
+    (constant reverse splits) it corrupts RVOL by the split factor. On True:
+    quarantine derived features for the symbol, never trust the join."""
+    if not yahoo_close or not raw_prior_close or yahoo_close <= 0:
+        return False
+    return abs(yahoo_close / raw_prior_close - 1) > tol
+
+
 def enrich_symbol(symbol: str) -> dict:
     """Float (millions of shares) and IPO age (months) via Yahoo, cached per
     day. The pump profile the review flagged: tiny float + young listing.

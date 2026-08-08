@@ -97,6 +97,53 @@ SKIP_DILUTION_FLAGS = True
 DILUTION: dict[str, str] = {}
 #: symbol -> (price, dollar_vol_m) from the radar - feeds the RVOL estimate
 RADAR_STATS: dict[str, tuple] = {}
+#: CIK -> symbol map for the EDGAR tripwire (built lazily as symbols appear)
+CIKS: dict[str, str] = {}
+
+
+def notify(title: str, msg: str) -> None:
+    """Push to the user's phone via the watchdog's ntfy topic. Best effort."""
+    try:
+        import urllib.request
+
+        from run_watchdog import _ntfy_topic
+
+        topic = _ntfy_topic()
+        if topic:
+            req = urllib.request.Request(
+                f"https://ntfy.sh/{topic}", data=msg.encode("utf-8"),
+                headers={"Title": title, "Priority": "high", "Tags": "rotating_light"})
+            urllib.request.urlopen(req, timeout=10)
+    except Exception:
+        log.debug("ntfy push failed", exc_info=True)
+
+
+def tripwire_exit(state: dict, broker: Broker, risk: RiskManager,
+                  symbol: str, reason: str) -> None:
+    """Information-based emergency exit: the held company just filed dilution
+    paperwork (424B/EFFECT/8-K 3.02/5.03). Sell now, at whatever the price
+    is - the filing, not a price level, is the trigger, so this respects the
+    no-stop-loss directive. Uses the full hardened sell sequence."""
+    log.critical("TRIPWIRE EXIT %s: %s - selling ALL now", symbol, reason)
+    notify(f"IBKR fleet: DILUTION TRIPWIRE {symbol}",
+           f"{reason}. Selling the position immediately (information-based exit).")
+    qty_pre = broker.position_qty(symbol)
+    all_done, fd = broker.cancel_symbol_orders(symbol, actions=("SELL",))
+    if not all_done:
+        log.error("%s: tripwire cancel unconfirmed - retrying next slice", symbol)
+        return
+    qty = broker.settled_position_qty(symbol, expected_max=qty_pre - fd) \
+        if qty_pre > 0 else broker.position_qty(symbol)
+    if qty > 0:
+        trade = broker.submit_market_order(symbol, "SELL", qty, risk, last_price=0.0)
+        journal(symbol, "SELL", "penny_tripwire_exit", qty=qty,
+                note=f"[penny] TRIPWIRE: {reason[:90]}")
+        if broker.wait_order_done(trade) >= qty:
+            state["positions"].pop(symbol, None)
+            save_state(state)
+    elif qty == 0:
+        state["positions"].pop(symbol, None)
+        save_state(state)
 
 
 # ---- ladder state (survives restarts and crashes) --------------------------
@@ -136,6 +183,13 @@ def save_state(state: dict) -> None:
 def watchlist(state: dict) -> list[str]:
     """Held names first (always managed), then fresh radar movers."""
     watch = []
+    tox = None
+    try:
+        from bot.toxicity import block_reason, load as tox_load
+
+        tox = tox_load()
+    except Exception:
+        pass
     for s in state["positions"]:
         if s in EXCLUDE:
             log.critical("%s: in the penny ladder AND another sleeve's basket - "
@@ -154,6 +208,13 @@ def watchlist(state: dict) -> list[str]:
                 RADAR_STATS[s] = (float(r["price"]), float(r["dollar_vol_m"]))
             except (TypeError, ValueError, KeyError):
                 pass
+            if tox is not None:
+                try:
+                    why = block_reason(s, tox)
+                    if why:
+                        continue  # exchange-flagged distressed / exact-ETF ban
+                except Exception:
+                    pass
             if s not in watch and s not in EXCLUDE \
                     and MIN_PRICE <= float(r["price"]) <= MAX_PRICE \
                     and float(r["dollar_vol_m"]) >= MIN_DVOL_M:
@@ -422,7 +483,8 @@ def flatten_all(state: dict, broker: Broker, risk: RiskManager) -> bool:
 
 
 def try_enter(symbol: str, state: dict, broker: Broker, risk: RiskManager,
-              last: float, rvol: float | None = None) -> bool:
+              last: float, rvol: float | None = None,
+              spread: float | None = None) -> bool:
     today = dt.date.today().isoformat()
     entered_today = state["entered"].setdefault(today, [])
     if symbol in EXCLUDE or symbol in entered_today or symbol in state["pending"]:
@@ -489,10 +551,17 @@ def try_enter(symbol: str, state: dict, broker: Broker, risk: RiskManager,
     entry_px = broker.last_fill_price if broker.last_fill_price > 0 else last * 1.01
     state["positions"][symbol] = new_ladder(today, entry_px, got)
     save_state(state)
+    try:
+        from bot.scanner import spread_tier
+
+        tier = spread_tier(spread)
+    except Exception:
+        tier = "unknown"
     journal(symbol, "BUY", "penny_entry", qty=qty, filled=got, signal_price=last,
             note=f"[penny] jeet ladder +8/+15, trail {int(TRAIL * 100)}%, floor on, "
-                 f"rvol={rvol if rvol is not None else '?'}")  # rvol LOGGED, not gated
-    return True
+                 f"rvol={rvol if rvol is not None else '?'}, "
+                 f"spread={spread if spread is not None else '?'}% tier={tier}")
+    return True  # rvol + spread are LOGGED evidence, not gates (yet)
 
 
 # ---- main loop -------------------------------------------------------------
@@ -627,32 +696,41 @@ def main() -> None:
                     elif entry_ok:
                         last = entry_price(bars)
                         if last is not None:
-                            rv = None
+                            rv, sp = None, None
                             try:
-                                # RVOL: is this mover ACTUALLY in play, or
-                                # just up? Logged with every entry so the
-                                # gate can decide if it becomes a filter.
+                                # RVOL (logged, not gated) + EDGE spread
+                                # (advisory tiers) + split-mismatch
+                                # quarantine (adjusted-Yahoo vs raw-IBKR
+                                # joins corrupt features after splits).
                                 from zoneinfo import ZoneInfo
 
-                                from bot.scanner import rvol_estimate
+                                from bot.scanner import (edge_spread_pct,
+                                                         rvol_estimate,
+                                                         split_mismatch)
 
                                 pr, dv = RADAR_STATS.get(symbol, (None, None))
                                 tb = todays_bars(bars)
                                 now_et = dt.datetime.now(ZoneInfo("America/New_York"))
-                                # Guard: with delayed data the "today" frame
-                                # can still be YESTERDAY's session at the
-                                # open - a full prior day vs a 2% expectation
-                                # would inflate rvol 50x (review finding).
-                                if pr and dv and len(tb) \
+                                prior = bars[[ts.date() < now_et.date()
+                                              for ts in bars.index]]
+                                bad_join = bool(pr and len(prior) and split_mismatch(
+                                    pr, float(prior["close"].iloc[-1])))
+                                if bad_join:
+                                    log.warning("%s: adjusted-vs-raw close mismatch "
+                                                "(corporate action?) - RVOL "
+                                                "quarantined this scan", symbol)
+                                if pr and dv and not bad_join and len(tb) \
                                         and tb.index[-1].date() == now_et.date():
                                     rv = rvol_estimate(
                                         # IBKR reports US-stock bar volume in
                                         # LOTS of 100; Yahoo's avg is shares.
                                         float(tb["volume"].sum()) * 100,
                                         dv * 1e6 / pr, now_et)
+                                sp = edge_spread_pct(bars)
                             except Exception:
                                 pass
-                            try_enter(symbol, state, broker, risk, last, rvol=rv)
+                            try_enter(symbol, state, broker, risk, last,
+                                      rvol=rv, spread=sp)
                 except Exception:
                     log.exception("Scan error on %s - continuing", symbol)
             save_state(state)
@@ -661,7 +739,33 @@ def main() -> None:
                 log.info("--once: single pass complete")
                 break
             scans += 1
-            broker.ib.sleep(SCAN_MINUTES * 60)
+            # Sleep in ~60s slices, watching the EDGAR tripwire on HELD names
+            # between scans. A dilution filing mid-hold is the one event worth
+            # waking for: detection target is <=60s, not a full scan cycle.
+            for _ in range(SCAN_MINUTES):
+                broker.ib.sleep(60)
+                if not state["positions"]:
+                    continue
+                try:
+                    from bot.tripwire import check, cik_map
+
+                    for s in list(state["positions"]):
+                        if s not in CIKS.values():
+                            CIKS.update(cik_map([s]))
+                    hits = check({c: s for c, s in CIKS.items()
+                                  if s in state["positions"]},
+                                 seen_name="tripwire_seen_penny.json")
+                    for h in hits:
+                        if h["action"] == "flatten":
+                            tripwire_exit(state, broker, risk, h["symbol"],
+                                          f"{h['form']}: {h['detail'][:60]}")
+                        else:
+                            log.warning("TRIPWIRE alert %s: %s",
+                                        h["symbol"], h["detail"])
+                            notify(f"IBKR fleet: filing alert {h['symbol']}",
+                                   h["detail"][:180])
+                except Exception:
+                    log.debug("tripwire check failed", exc_info=True)
     finally:
         if state is not None:
             save_state(state)

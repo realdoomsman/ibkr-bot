@@ -26,6 +26,8 @@ news_extra.txt
 health.json
 watchdog_state.json
 heartbeat_*.txt
+toxicity.json
+tripwire_seen*.json
 screen_results.csv
 screens_archive/
 eventstudy_results.csv

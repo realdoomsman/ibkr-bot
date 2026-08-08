@@ -237,6 +237,23 @@ def main() -> None:
             except Exception:
                 pass
 
+            # ---- 5c. EDGAR tripwire (alert layer): filings on held names --
+            # The penny engine flattens its own holds within ~60s; this
+            # 30-min sweep covers everything else (intraday basket, orphans).
+            try:
+                from bot.tripwire import check, cik_map
+
+                for h in check(cik_map([s for s, _ in positions]),
+                               seen_name="tripwire_seen_watchdog.json"):
+                    problems.append(f"filing on held {h['symbol']}: {h['form']}")
+                    al.alert(f"tripwire_{h['symbol']}",
+                             f"IBKR fleet: FILING on held {h['symbol']}",
+                             f"{h['detail']} - "
+                             + ("dilution-class filing; exit is warranted."
+                                if h["action"] == "flatten" else "watch closely."))
+            except Exception:
+                pass
+
             # ---- 6. anything held after the close? ------------------------
             if now.weekday() < 5 and now.time() >= dt.time(16, 5) and positions:
                 problems.append("positions past the close")

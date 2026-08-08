@@ -101,6 +101,19 @@ def main() -> None:
         handlers=[logging.StreamHandler(), logging.FileHandler("rotation.log", encoding="utf-8")],
     )
 
+    # Refresh the exchange toxicity feeds first (FSI distress codes, exact
+    # ETF flags, reverse-split announcements) - the whole fleet reads the
+    # resulting toxicity.json all day.
+    tox = None
+    try:
+        from bot.toxicity import block_reason as tox_block
+        from bot.toxicity import refresh as tox_refresh
+
+        tox = tox_refresh()
+    except Exception:
+        log.warning("toxicity refresh failed - continuing with yesterday's file",
+                    exc_info=True)
+
     daily_old, intra_old = current_baskets()
     held = held_symbols()
     if held is None:
@@ -128,6 +141,14 @@ def main() -> None:
     for sym in pool[:60]:
         if sym.upper() in BLOCKED_SYMBOLS:
             continue  # no ETFs, no gambling stocks (user directives 2026-08-05)
+        if tox is not None:
+            try:
+                why = tox_block(sym.upper(), tox)
+                if why:
+                    log.info("Skipping %s: %s", sym, why)
+                    continue
+            except Exception:
+                pass
         if is_china_based(sym):
             log.info("Skipping %s: China/HK-based (user directive 2026-08-05)", sym)
             continue

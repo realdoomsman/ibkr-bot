@@ -87,8 +87,11 @@ def enrich_symbol(symbol: str) -> dict:
             out["ipo_months"] = round(months, 1)
     except Exception:
         log.debug("enrich failed for %s", symbol, exc_info=True)
-    try:
-        p.write_text(json.dumps(out), encoding="utf-8")
-    except Exception:
-        pass
+    # Cache only real data: an all-None result from a transient Yahoo hiccup
+    # must not poison the whole day (review finding) - retry next call.
+    if out["float_m"] is not None or out["ipo_months"] is not None:
+        try:
+            p.write_text(json.dumps(out), encoding="utf-8")
+        except Exception:
+            pass
     return out

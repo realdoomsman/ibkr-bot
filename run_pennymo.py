@@ -637,11 +637,19 @@ def main() -> None:
                                 from bot.scanner import rvol_estimate
 
                                 pr, dv = RADAR_STATS.get(symbol, (None, None))
-                                if pr and dv:
+                                tb = todays_bars(bars)
+                                now_et = dt.datetime.now(ZoneInfo("America/New_York"))
+                                # Guard: with delayed data the "today" frame
+                                # can still be YESTERDAY's session at the
+                                # open - a full prior day vs a 2% expectation
+                                # would inflate rvol 50x (review finding).
+                                if pr and dv and len(tb) \
+                                        and tb.index[-1].date() == now_et.date():
                                     rv = rvol_estimate(
-                                        float(todays_bars(bars)["volume"].sum()),
-                                        dv * 1e6 / pr,
-                                        dt.datetime.now(ZoneInfo("America/New_York")))
+                                        # IBKR reports US-stock bar volume in
+                                        # LOTS of 100; Yahoo's avg is shares.
+                                        float(tb["volume"].sum()) * 100,
+                                        dv * 1e6 / pr, now_et)
                             except Exception:
                                 pass
                             try_enter(symbol, state, broker, risk, last, rvol=rv)

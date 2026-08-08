@@ -1,0 +1,25 @@
+﻿EVALUATION GATE PREVIEW  2026-08-07   (evidence window since 2026-08-10)
+====================================================================
+Criteria pre-registered 2026-08-07 - never edited after data existed.
+
+SLEEVES (need >= 100 trips each, net > $0, <5% process errors):
+  no round trips recorded in the window yet
+
+ML FILTER (needs >= 100 scored trips over >= 20 days, gated > actual, vetoes negative):
+  no scoreboard days in the window yet
+
+PENNY BRAIN (needs >= 60 resolved predictions, KEEPS beats FADES by 3.0pp):
+  no prediction data yet
+
+OPERATIONS (any blackout day in the window disqualifies live talk):
+  TWS-unreachable days since 2026-08-10: 0
+
+REAL-MONEY DISCUSSION requires ALL of:
+  [ ] >= 300 total round trips (have 0)
+  [ ] >= 1 sleeve(s) passing promotion (have 0)
+  [x] <= 0 blackout days (have 0)
+  [?] real-time market data active >= 2 weeks (check subscription status manually)
+
+This report DECIDES NOTHING. A human reads it at the gate.
+
+-> gate_report.txt

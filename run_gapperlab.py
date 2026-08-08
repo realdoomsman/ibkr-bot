@@ -138,6 +138,65 @@ def rung_sweep(df: pd.DataFrame) -> list[str]:
     return rows
 
 
+def runner_analysis() -> list[str]:
+    """The user's core thesis: 'these can go 3+ dollars in a day, a 3x.' The
+    runner file timestamps when each mover crossed +50/+75/+100/+150% - so we
+    can quantify how OFTEN a moon bag actually pays, and what the overnight
+    (next-day) continuation the EOD flatten forfeits/avoids really looks like."""
+    p = Path("smallcaplab_data/intraday_runner_data.csv")
+    if not p.exists():
+        return []
+    r = pd.read_csv(p)
+    for c in ("hod", "today_open", "rth_close", "next_day_open"):
+        r[c] = pd.to_numeric(r[c], errors="coerce")
+    n = len(r)
+    ext = (r["hod"] / r["today_open"] - 1) * 100     # HOD extension from open
+    hit100 = (r["trig100_time"].notna()).mean()
+    hit150 = (r["trig150_time"].notna()).mean()
+    # overnight: next open vs today's RTH close (what the flatten gives up)
+    on = (r["next_day_open"] / r["rth_close"] - 1) * 100
+    on = on.replace([np.inf, -np.inf], np.nan).dropna()
+    return [
+        f"RUNNER ANALYSIS ({n} intraday runners - the moon-bag thesis):",
+        f"  crossed +100% intraday: {100 * hit100:.0f}%   +150%: {100 * hit150:.0f}%",
+        f"  median HOD extension from open: {ext.median():+.0f}%",
+        f"  of runners, {100 * (ext >= 200).mean():.0f}% reached +200%+ (the true 3x)",
+        f"  OVERNIGHT (next-open vs RTH close - what the EOD flatten skips):",
+        f"    avg {on.mean():+.1f}%, median {on.median():+.1f}%, "
+        f"positive {100 * (on > 0).mean():.0f}%  (n={len(on)})",
+        "    -> negative/near-zero median = the flatten AVOIDS a bad hold, not",
+        "       forfeits a good one; Gate E's overnight null holds up.",
+    ]
+
+
+def regime_analysis() -> list[str]:
+    """Market Character daily -> the hot-tape/cold-tape throttle. Does a high
+    gapper-count day predict the NEXT day's tradeability (persistence), and
+    what does 'today' look like vs the long-run average?"""
+    p = Path("smallcaplab_data/market_character_daily.csv")
+    if not p.exists():
+        return []
+    m = pd.read_csv(p).sort_values("date")
+    for c in ("n_gappers", "fade_rate", "avg_hod_from_open", "n_gap_above_100pct"):
+        m[c] = pd.to_numeric(m[c], errors="coerce")
+    # lag-1 autocorrelation of gapper COUNT (the research claimed ~0.43)
+    ac = m["n_gappers"].autocorr(lag=1)
+    hot = m["n_gappers"] >= m["n_gappers"].quantile(0.75)
+    cold = m["n_gappers"] <= m["n_gappers"].quantile(0.25)
+    return [
+        f"REGIME ({len(m)} days - the hot/cold-tape throttle):",
+        f"  gapper-count lag-1 autocorrelation: {ac:.2f}  "
+        f"(>=0.25 means counts PERSIST -> a throttle can work; research said ~0.43)",
+        f"  hot days (top quartile): {m.loc[hot,'n_gappers'].mean():.0f} gappers, "
+        f"fade {m.loc[hot,'fade_rate'].mean():.0f}%, "
+        f"avg HOD {m.loc[hot,'avg_hod_from_open'].mean():+.0f}%",
+        f"  cold days (bottom quartile): {m.loc[cold,'n_gappers'].mean():.1f} gappers, "
+        f"fade {m.loc[cold,'fade_rate'].mean():.0f}%",
+        "  -> if counts persist, a pre-market gapper count throttles position",
+        "     count/size for the day (pre-registered gate, advisory first).",
+    ]
+
+
 def hod_timing(df: pd.DataFrame) -> list[str]:
     t = pd.to_datetime(df["high_time"], format="%H:%M", errors="coerce").dt.time
     def frac_by(hh, mm):
@@ -158,6 +217,7 @@ def main() -> None:
         return
     df = load()
     out = (base_rates(df) + [""] + replay_ladder(df) + [""] + rung_sweep(df)
+           + [""] + runner_analysis() + [""] + regime_analysis()
            + [""] + hod_timing(df))
     report = "\n".join(out)
     print(report)

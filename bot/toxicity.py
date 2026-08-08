@@ -43,8 +43,10 @@ def _fetch(url: str) -> str:
 
 def refresh() -> dict:
     """Rebuild toxicity.json. Returns the data (or yesterday's on failure)."""
+    prev = load()
     data = {"date": dt.date.today().isoformat(), "fsi": {}, "etf": [],
             "reverse_split": []}
+    nasdaq_ok = False
     try:
         # Nasdaq-listed: Symbol|Security Name|Category|Test|FinancialStatus|Lot|ETF|NextShares
         lines = _fetch(SYMDIR).splitlines()
@@ -59,6 +61,7 @@ def refresh() -> dict:
                 data["fsi"][sym] = f[i_fsi].strip().upper()
             if f[i_etf].strip().upper() == "Y":
                 data["etf"].append(sym)
+        nasdaq_ok = True
     except Exception:
         log.warning("nasdaqlisted.txt fetch failed", exc_info=True)
     try:
@@ -81,9 +84,18 @@ def refresh() -> dict:
     except Exception:
         log.warning("reverse-split RSS fetch failed", exc_info=True)
 
-    if data["fsi"] or data["etf"]:
-        data["etf"] = sorted(set(data["etf"]))
-        data["reverse_split"] = sorted(set(data["reverse_split"]))
+    # Per-source carry-forward: a HALF-failed refresh must not silently
+    # unblock every distressed name. Only overwrite a section we actually
+    # fetched; otherwise keep yesterday's (stale beats blind).
+    if not nasdaq_ok:
+        if prev.get("fsi"):
+            data["fsi"] = prev["fsi"]
+            log.warning("nasdaqlisted failed - kept previous FSI list (%d names)",
+                        len(data["fsi"]))
+    if nasdaq_ok or data["etf"] or data["fsi"]:
+        data["etf"] = sorted(set(data["etf"]) or set(prev.get("etf", [])))
+        data["reverse_split"] = sorted(set(data["reverse_split"])
+                                       or set(prev.get("reverse_split", [])))
         import os
 
         tmp = TOX_FILE.with_suffix(".json.tmp")

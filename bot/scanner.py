@@ -67,7 +67,12 @@ def edge_spread_pct(bars) -> float | None:
     This is the system's largest previously-unmeasured cost: a 1.5%% spread
     consumes a fifth of the ladder's +8%% first rung. ADVISORY tiers derived
     from the ladder's expectancy math: <=0.75%% full clip, <=1.5%% half,
-    >1.5%% reject. Journaled per entry; gating decided at a gate."""
+    >1.5%% reject. Journaled per entry; gating decided at a gate.
+
+    Precision note: the estimator's error scales ~1/sqrt(n). The verified
+    envelope was 390 bars; live callers pass ~90 (2-3 sessions), so treat the
+    tier boundaries as soft and let the gate weigh the noise. Returns the bar
+    count alongside the estimate so the journal records the sample size."""
     try:
         from bidask import edge
 

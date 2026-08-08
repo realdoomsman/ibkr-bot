@@ -39,11 +39,15 @@ UA = {"User-Agent": "ibkr-paper-research-bot contact realdoomsalt@gmail.com"}
 SEEN_FILE = Path("tripwire_seen.json")
 ATOM = {"a": "http://www.w3.org/2005/Atom"}
 
-FLATTEN_FORMS = ("424B1", "424B4", "424B5", "EFFECT")
-ALERT_FORMS = ("424B3", "S-1", "S-3")
+# Exact form matches (prefix-matching wrongly caught 8-K12B, S-11, etc.).
+# EFFECT is disseminated in an overnight batch, not intraday - it stays a
+# best-effort catch here and is really covered at ENTRY by edgar.dilution_flags.
+FLATTEN_FORMS = {"424B1", "424B4", "424B5", "EFFECT"}
+ALERT_FORMS = {"424B3", "S-1", "S-3", "S-1/A", "S-3/A"}
+EIGHTK_FORMS = {"8-K", "8-K/A"}
 FLATTEN_8K_ITEMS = ("3.02", "5.03")
 
-_cache: dict = {"at": 0.0, "entries": []}
+_cache: dict = {"at": 0.0, "entries": [], "pages": 0}
 
 
 def _load_seen(path: Path) -> dict:
@@ -63,40 +67,65 @@ def _save_seen(path: Path, seen: dict) -> None:
         pass
 
 
-def _fetch_entries() -> list[dict]:
-    """Latest ~100 filings market-wide, cached 45s. [] on any failure."""
+def _fetch_entries(pages: int = 1) -> list[dict]:
+    """Newest filings market-wide, cached 45s. `pages` x 100 entries via the
+    &start= param - the 100-entry window covers only ~7-20 min at RTH rates,
+    so the 30-min watchdog sweep must page back further or it misses filings.
+    [] on any failure (fail-open)."""
     now = time.time()
-    if now - _cache["at"] < 45:
+    if now - _cache["at"] < 45 and _cache["pages"] >= pages:
         return _cache["entries"]
     _cache["at"] = now  # stamp first: an outage costs one timeout per window
     try:
-        req = urllib.request.Request(FEED, headers=UA)
-        root = ET.fromstring(urllib.request.urlopen(req, timeout=10).read())
         entries = []
-        for e in root.findall("a:entry", ATOM):
-            title = e.findtext("a:title", "", ATOM)
-            entries.append({
-                "id": e.findtext("a:id", "", ATOM),
-                "title": title,
-                # "424B5 - COMPANY INC (0001234567) (Filer)"
-                "form": title.split(" - ")[0].strip().upper(),
-                "cik": (re.search(r"\((\d{10})\)", title) or [None, ""])[1],
-                "summary": e.findtext("a:summary", "", ATOM) or "",
-            })
-        _cache["entries"] = entries
+        for pg in range(pages):
+            url = FEED + f"&start={pg * 100}"
+            req = urllib.request.Request(url, headers=UA)
+            root = ET.fromstring(urllib.request.urlopen(req, timeout=10).read())
+            page_entries = root.findall("a:entry", ATOM)
+            for e in page_entries:
+                title = e.findtext("a:title", "", ATOM)
+                entries.append({
+                    "id": e.findtext("a:id", "", ATOM),
+                    "title": title,
+                    # "424B5 - COMPANY INC (0001234567) (Filer)"
+                    "form": title.split(" - ")[0].strip().upper(),
+                    "cik": (re.search(r"\((\d{10})\)", title) or [None, ""])[1],
+                    "summary": e.findtext("a:summary", "", ATOM) or "",
+                })
+            if len(page_entries) < 100:
+                break  # last page
+        _cache["entries"], _cache["pages"] = entries, pages
     except Exception:
         log.debug("tripwire feed unavailable", exc_info=True)
     return _cache["entries"]
 
 
+def classify(form: str, summary: str) -> tuple[str, str]:
+    """(action, label) for a form. action in {'flatten','alert',''}."""
+    form = form.upper()
+    if form in FLATTEN_FORMS:
+        return "flatten", form
+    if form in EIGHTK_FORMS:
+        items = re.findall(r"Item\s+(\d+\.\d+)", summary or "")
+        if any(i in FLATTEN_8K_ITEMS for i in items):
+            return "flatten", f"8-K item {','.join(i for i in items if i in FLATTEN_8K_ITEMS)}"
+        return "", ""  # ordinary 8-K (PR/earnings) - not a dilution signal
+    if form in ALERT_FORMS:
+        return "alert", form
+    return "", ""
+
+
 def check(cik_to_symbol: dict[str, str],
-          seen_name: str = "tripwire_seen.json") -> list[dict]:
+          seen_name: str = "tripwire_seen.json",
+          pages: int = 1) -> list[dict]:
     """New filings matching our CIKs since last check.
 
-    Returns [{symbol, form, action: 'flatten'|'alert', detail}]. Each filing
-    fires exactly once PER CONSUMER: every caller must pass its own
-    seen_name, or one consumer's dedupe would swallow another's flatten
-    signal (the penny engine and the watchdog both watch this feed).
+    Returns [{symbol, form, action, detail, id}]. IMPORTANT: 'alert' hits are
+    marked seen here (losing one is harmless); 'flatten' hits are NOT marked
+    seen - the caller must ack() them only after the exit is CONFIRMED, so a
+    failed flatten re-fires instead of riding the rug (the exact tail this
+    module exists to cut). Each consumer passes its own seen_name.
     """
     if not cik_to_symbol:
         return []
@@ -104,30 +133,37 @@ def check(cik_to_symbol: dict[str, str],
     seen_path = Path(seen_name)
     seen = _load_seen(seen_path)
     known = set(seen["ids"])
-    for e in _fetch_entries():
+    changed = False
+    for e in _fetch_entries(pages):
         if not e["cik"] or e["cik"] not in cik_to_symbol or e["id"] in known:
             continue
-        seen["ids"].append(e["id"])
+        action, label = classify(e["form"], e["summary"])
+        if not action:
+            continue
         sym = cik_to_symbol[e["cik"]]
-        form, action = e["form"], ""
-        if any(form.startswith(f) for f in FLATTEN_FORMS):
-            action = "flatten"
-        elif form.startswith("8-K"):
-            items = re.findall(r"Item\s+(\d+\.\d+)", e["summary"] or e["title"])
-            if any(i in FLATTEN_8K_ITEMS for i in items):
-                action, form = "flatten", f"8-K item {','.join(items)}"
-            else:
-                action = "alert"
-        elif any(form.startswith(f) for f in ALERT_FORMS):
-            action = "alert"
-        if action:
-            hits.append({"symbol": sym, "form": form, "action": action,
-                         "detail": e["title"][:120]})
-            log.warning("TRIPWIRE %s: %s filed %s -> %s",
-                        sym, action.upper(), form, e["title"][:100])
-    if hits or seen["ids"] != list(known):
+        hit = {"symbol": sym, "form": label, "action": action,
+               "detail": e["title"][:120], "id": e["id"]}
+        hits.append(hit)
+        log.warning("TRIPWIRE %s: %s filed %s -> %s", sym, action.upper(),
+                    label, e["title"][:100])
+        if action == "alert":  # flatten ids are ack'd only after a confirmed exit
+            seen["ids"].append(e["id"])
+            changed = True
+    if changed:
         _save_seen(seen_path, seen)
     return hits
+
+
+def ack(filing_id: str, seen_name: str) -> None:
+    """Mark a flatten-class filing handled - call ONLY after the exit is
+    confirmed flat, so an unconfirmed exit re-fires on the next check()."""
+    if not filing_id:
+        return
+    seen_path = Path(seen_name)
+    seen = _load_seen(seen_path)
+    if filing_id not in seen["ids"]:
+        seen["ids"].append(filing_id)
+        _save_seen(seen_path, seen)
 
 
 def cik_map(symbols: list[str]) -> dict[str, str]:

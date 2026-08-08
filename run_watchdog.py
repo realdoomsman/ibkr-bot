@@ -243,8 +243,10 @@ def main() -> None:
             try:
                 from bot.tripwire import check, cik_map
 
+                # Page back ~4x100 filings: at RTH rates the 100-entry window
+                # is ~7-20 min, but this sweep runs only every 30 min.
                 for h in check(cik_map([s for s, _ in positions]),
-                               seen_name="tripwire_seen_watchdog.json"):
+                               seen_name="tripwire_seen_watchdog.json", pages=4):
                     problems.append(f"filing on held {h['symbol']}: {h['form']}")
                     al.alert(f"tripwire_{h['symbol']}",
                              f"IBKR fleet: FILING on held {h['symbol']}",

@@ -118,32 +118,92 @@ def notify(title: str, msg: str) -> None:
         log.debug("ntfy push failed", exc_info=True)
 
 
+PENNY_SEEN = "tripwire_seen_penny.json"
+
+
 def tripwire_exit(state: dict, broker: Broker, risk: RiskManager,
-                  symbol: str, reason: str) -> None:
+                  symbol: str, reason: str) -> bool:
     """Information-based emergency exit: the held company just filed dilution
-    paperwork (424B/EFFECT/8-K 3.02/5.03). Sell now, at whatever the price
-    is - the filing, not a price level, is the trigger, so this respects the
-    no-stop-loss directive. Uses the full hardened sell sequence."""
+    paperwork (424B/8-K 3.02/5.03). Sell now, at whatever the price is - the
+    filing, not a price level, is the trigger, so this respects the
+    no-stop-loss directive. Returns True only when the position is CONFIRMED
+    flat; a False return keeps the symbol in the pending-flatten queue to
+    retry next slice (a failed exit must NEVER be silently dropped)."""
     log.critical("TRIPWIRE EXIT %s: %s - selling ALL now", symbol, reason)
-    notify(f"IBKR fleet: DILUTION TRIPWIRE {symbol}",
-           f"{reason}. Selling the position immediately (information-based exit).")
     qty_pre = broker.position_qty(symbol)
+    if qty_pre <= 0:
+        state["positions"].pop(symbol, None)
+        return True  # already flat / manual close
     all_done, fd = broker.cancel_symbol_orders(symbol, actions=("SELL",))
     if not all_done:
-        log.error("%s: tripwire cancel unconfirmed - retrying next slice", symbol)
-        return
-    qty = broker.settled_position_qty(symbol, expected_max=qty_pre - fd) \
-        if qty_pre > 0 else broker.position_qty(symbol)
-    if qty > 0:
-        trade = broker.submit_market_order(symbol, "SELL", qty, risk, last_price=0.0)
-        journal(symbol, "SELL", "penny_tripwire_exit", qty=qty,
-                note=f"[penny] TRIPWIRE: {reason[:90]}")
-        if broker.wait_order_done(trade) >= qty:
-            state["positions"].pop(symbol, None)
-            save_state(state)
-    elif qty == 0:
+        log.error("%s: tripwire cancel unconfirmed - RETRYING next slice", symbol)
+        return False
+    qty = broker.settled_position_qty(symbol, expected_max=qty_pre - fd)
+    if qty <= 0:
         state["positions"].pop(symbol, None)
-        save_state(state)
+        return True
+    trade = broker.submit_market_order(symbol, "SELL", qty, risk, last_price=0.0)
+    journal(symbol, "SELL", "penny_tripwire_exit", qty=qty,
+            note=f"[penny] TRIPWIRE: {reason[:90]}")
+    if broker.wait_order_done(trade) >= qty and broker.position_qty(symbol) <= 0:
+        state["positions"].pop(symbol, None)
+        return True
+    log.error("%s: tripwire sell not fully confirmed - RETRYING next slice", symbol)
+    return False
+
+
+def process_tripwire(state: dict, broker: Broker, risk: RiskManager) -> None:
+    """Retry every pending dilution-exit until flat, THEN poll the feed for
+    new filings on held names. The pending queue persists in state, so a
+    failed sell, exception, or crash-restart all re-attempt - decoupled from
+    the feed's one-shot dedupe."""
+    pending = state.setdefault("pending_flatten", {})
+    # 1. retry outstanding exits first (these are life-or-death for the book)
+    for sym in list(pending):
+        if sym not in state["positions"] and broker.position_qty(sym) <= 0:
+            from bot.tripwire import ack
+
+            ack(pending[sym].get("id", ""), PENNY_SEEN)  # confirmed flat -> dedupe now
+            del pending[sym]
+            save_state(state)
+            continue
+        try:
+            if tripwire_exit(state, broker, risk, sym, pending[sym]["reason"]):
+                from bot.tripwire import ack
+
+                ack(pending[sym].get("id", ""), PENNY_SEEN)
+                del pending[sym]
+                save_state(state)
+        except Exception:
+            log.exception("%s: tripwire retry errored - stays queued", sym)
+    # 2. poll the feed for NEW filings on held names
+    if not state["positions"]:
+        return
+    try:
+        from bot.tripwire import check, cik_map
+
+        for s in list(state["positions"]):
+            if s not in CIKS.values():
+                CIKS.update(cik_map([s]))
+        hits = check({c: s for c, s in CIKS.items() if s in state["positions"]},
+                     seen_name=PENNY_SEEN)
+        for h in hits:
+            if h["action"] == "flatten":
+                notify(f"IBKR fleet: DILUTION TRIPWIRE {h['symbol']}",
+                       f"{h['form']}: {h['detail'][:80]} - exiting now.")
+                pending[h["symbol"]] = {"reason": f"{h['form']}: {h['detail'][:60]}",
+                                        "id": h["id"]}
+                save_state(state)
+                if tripwire_exit(state, broker, risk, h["symbol"],
+                                 pending[h["symbol"]]["reason"]):
+                    ack(h["id"], PENNY_SEEN)
+                    pending.pop(h["symbol"], None)
+                    save_state(state)
+            else:
+                log.warning("TRIPWIRE alert %s: %s", h["symbol"], h["detail"])
+                notify(f"IBKR fleet: filing alert {h['symbol']}", h["detail"][:180])
+    except Exception:
+        log.debug("tripwire check failed", exc_info=True)
 
 
 # ---- ladder state (survives restarts and crashes) --------------------------
@@ -204,10 +264,11 @@ def watchlist(state: dict) -> list[str]:
             flags = str(r.get("sec_flags") or "")
             if flags and flags != "nan":
                 DILUTION[s] = flags
-            try:
-                RADAR_STATS[s] = (float(r["price"]), float(r["dollar_vol_m"]))
-            except (TypeError, ValueError, KeyError):
-                pass
+            if s not in RADAR_STATS:  # rows iterate newest-first; keep newest
+                try:
+                    RADAR_STATS[s] = (float(r["price"]), float(r["dollar_vol_m"]))
+                except (TypeError, ValueError, KeyError):
+                    pass
             if tox is not None:
                 try:
                     why = block_reason(s, tox)
@@ -711,15 +772,16 @@ def main() -> None:
                                 pr, dv = RADAR_STATS.get(symbol, (None, None))
                                 tb = todays_bars(bars)
                                 now_et = dt.datetime.now(ZoneInfo("America/New_York"))
-                                prior = bars[[ts.date() < now_et.date()
-                                              for ts in bars.index]]
-                                bad_join = bool(pr and len(prior) and split_mismatch(
-                                    pr, float(prior["close"].iloc[-1])))
-                                if bad_join:
-                                    log.warning("%s: adjusted-vs-raw close mismatch "
-                                                "(corporate action?) - RVOL "
-                                                "quarantined this scan", symbol)
-                                if pr and dv and not bad_join and len(tb) \
+                                # Sanity gate: the radar's capture price and
+                                # IBKR's live price are BOTH raw actual prices;
+                                # a >3x disagreement means a reverse-split scale
+                                # error in the Yahoo-derived denominator, not a
+                                # day's move. (True split-vs-raw AUDIT runs in
+                                # the nightly lab on clean daily bars - doing it
+                                # here on the capture price false-tripped on
+                                # every +12% mover, review finding.)
+                                scale_ok = bool(pr and last and 0.33 < last / pr < 3.0)
+                                if pr and dv and scale_ok and len(tb) \
                                         and tb.index[-1].date() == now_et.date():
                                     rv = rvol_estimate(
                                         # IBKR reports US-stock bar volume in
@@ -739,33 +801,14 @@ def main() -> None:
                 log.info("--once: single pass complete")
                 break
             scans += 1
-            # Sleep in ~60s slices, watching the EDGAR tripwire on HELD names
+            # Sleep in ~60s slices, running the EDGAR tripwire on HELD names
             # between scans. A dilution filing mid-hold is the one event worth
             # waking for: detection target is <=60s, not a full scan cycle.
+            # process_tripwire also retries any pending exit until flat.
             for _ in range(SCAN_MINUTES):
                 broker.ib.sleep(60)
-                if not state["positions"]:
-                    continue
-                try:
-                    from bot.tripwire import check, cik_map
-
-                    for s in list(state["positions"]):
-                        if s not in CIKS.values():
-                            CIKS.update(cik_map([s]))
-                    hits = check({c: s for c, s in CIKS.items()
-                                  if s in state["positions"]},
-                                 seen_name="tripwire_seen_penny.json")
-                    for h in hits:
-                        if h["action"] == "flatten":
-                            tripwire_exit(state, broker, risk, h["symbol"],
-                                          f"{h['form']}: {h['detail'][:60]}")
-                        else:
-                            log.warning("TRIPWIRE alert %s: %s",
-                                        h["symbol"], h["detail"])
-                            notify(f"IBKR fleet: filing alert {h['symbol']}",
-                                   h["detail"][:180])
-                except Exception:
-                    log.debug("tripwire check failed", exc_info=True)
+                if state["positions"] or state.get("pending_flatten"):
+                    process_tripwire(state, broker, risk)
     finally:
         if state is not None:
             save_state(state)

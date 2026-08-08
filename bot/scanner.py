@@ -111,14 +111,18 @@ def split_mismatch(yahoo_close: float, raw_prior_close: float,
     return abs(yahoo_close / raw_prior_close - 1) > tol
 
 
-def premarket_high(ib, symbol: str) -> float | None:
-    """Today's premarket high (04:00-09:30 ET) from IBKR extended-hours bars.
+def premarket_high(ib, symbol: str):
+    """(premarket high, time it was set) for today, from IBKR extended-hours
+    5-min bars (04:00-09:30 ET). Returns (None, None) if unavailable
+    (fail-open - missing PM data must never block trading).
 
-    The single strongest entry filter found in 1,506 real gapper events: movers
-    that BREAK their premarket high are ~breakeven with an 83%% win rate; those
-    that fail to are -11.6%% with a coin-flip win rate. Breaking the PM high =
-    real demand confirming the move. Returns None if unavailable (fail-open -
-    a missing PM high must not block trading)."""
+    Two evidence-based filters ride on this (1,506 real gapper replays):
+      1. BREAK filter: movers that break the PM high are ~breakeven/83%-win;
+         those below it are -11.6%/49%-win. Only buy the break.
+      2. EARLY-HIGH filter: within the break cohort, a PM high set BEFORE
+         08:00 nets +2.50%/90%-win (n=326) vs -1.35%/79% for late PM highs -
+         an early high later broken = fresh RTH demand over a mature base;
+         a just-set high broken immediately = chasing an extended spike."""
     try:
         import datetime as _dt
         from zoneinfo import ZoneInfo
@@ -133,15 +137,19 @@ def premarket_high(ib, symbol: str) -> float | None:
             useRTH=False, formatDate=1,   # <-- extended hours INCLUDED
         )
         if not bars:
-            return None
+            return None, None
         df = util.df(bars)
         df["date"] = pd.to_datetime(df["date"])
         today = _dt.datetime.now(ZoneInfo("America/New_York")).date()
         pm = df[[t.date() == today and t.time() < _dt.time(9, 30) for t in df["date"]]]
-        return round(float(pm["high"].max()), 4) if len(pm) else None
+        if not len(pm):
+            return None, None
+        idx = pm["high"].idxmax()
+        return (round(float(pm.loc[idx, "high"]), 4),
+                pm.loc[idx, "date"].time())
     except Exception:
         log.debug("premarket_high failed for %s", symbol, exc_info=True)
-        return None
+        return None, None
 
 
 def enrich_symbol(symbol: str) -> dict:

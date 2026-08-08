@@ -99,20 +99,22 @@ DILUTION: dict[str, str] = {}
 RADAR_STATS: dict[str, tuple] = {}
 #: CIK -> symbol map for the EDGAR tripwire (built lazily as symbols appear)
 CIKS: dict[str, str] = {}
-#: symbol -> (date, premarket high) cache - one extended-hours fetch per day
+#: symbol -> (date, pm_high, pm_high_time) - one extended-hours fetch per day
 PM_HIGHS: dict[str, tuple] = {}
+#: symbols already logged as late-PMH-skipped today (log once, not per scan)
+LATE_PMH_LOGGED: set = set()
 
 
-def pm_high_today(broker: Broker, symbol: str) -> float | None:
+def pm_high_today(broker: Broker, symbol: str):
     today = dt.date.today().isoformat()
     cached = PM_HIGHS.get(symbol)
     if cached and cached[0] == today:
-        return cached[1]
+        return cached[1], cached[2]
     from bot.scanner import premarket_high
 
-    v = premarket_high(broker.ib, symbol)
-    PM_HIGHS[symbol] = (today, v)
-    return v
+    v, t = premarket_high(broker.ib, symbol)
+    PM_HIGHS[symbol] = (today, v, t)
+    return v, t
 
 
 def notify(title: str, msg: str) -> None:
@@ -779,15 +781,30 @@ def main() -> None:
                             # cohort - and does NOT consume the one-attempt-
                             # per-day (the break may come later). Fail-open
                             # when the PM high is unavailable.
-                            pmh = None
+                            pmh, pmh_t = None, None
                             try:
-                                pmh = pm_high_today(broker, symbol)
+                                pmh, pmh_t = pm_high_today(broker, symbol)
                             except Exception:
                                 pass
                             if pmh is not None and last <= pmh:
                                 log.info("%s: mover but BELOW premarket high "
                                          "(%.2f <= %.2f) - waiting for the "
                                          "break", symbol, last, pmh)
+                                continue
+                            # EARLY-HIGH filter (2nd evidence-based edit): a
+                            # PM high set at/after 08:00 = the spike is
+                            # already extended into the open; its break nets
+                            # -1.35% vs +2.50% for early highs. Skip the day.
+                            if pmh is not None and pmh_t is not None \
+                                    and pmh_t >= dt.time(8, 0):
+                                if symbol not in LATE_PMH_LOGGED:
+                                    LATE_PMH_LOGGED.add(symbol)
+                                    log.info("%s: PM high set late (%s) - "
+                                             "skipping today (early-high "
+                                             "filter)", symbol, pmh_t)
+                                    journal(symbol, "BUY", "blocked_entry",
+                                            signal_price=last,
+                                            note=f"[penny] late PM high {pmh_t}")
                                 continue
                             rv, sp = None, None
                             try:

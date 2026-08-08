@@ -138,6 +138,93 @@ def rung_sweep(df: pd.DataFrame) -> list[str]:
     return rows
 
 
+def cohort_refinement(df: pd.DataFrame) -> list[str]:
+    """SECOND-filter search ON the PMH-break cohort (the ~breakeven, 83%-win
+    group the bot now trades). Full grid declared here and every cell
+    reported - no cherry-picking. Bar for wiring into the bot: n>=250,
+    net>=+1.5%, and a mechanical story (same bar the PMH filter cleared)."""
+    d = df[(df["open"] >= MIN_PRICE) & (df["open"] <= MAX_PRICE)].copy()
+    entry = d["open"] * (1 + ENTRY_GAIN) * (1 + CAP)
+    trig = (d["high"] >= entry) & (d["high"] > d["pm_high"])   # PMH-break cohort
+    d, entry = d[trig].copy(), entry[trig]
+    hi, lo, close = d["high"], d["low"], d["close"]
+    h1, h2 = hi >= entry * RUNGS[0], hi >= entry * RUNGS[1]
+    proc = np.where(h1, RUNG_FRAC * RUNGS[0], 0) + np.where(h2, RUNG_FRAC * RUNGS[1], 0)
+    rem = 1.0 - RUNG_FRAC * (h1.astype(int) + h2.astype(int))
+    floor = h1 & (lo <= entry)
+    d["_net"] = np.maximum(proc + rem * (np.where(floor, entry, close) / entry)
+                           - 1 - COST_PCT, -1.0)
+
+    pmt = pd.to_datetime(d["pm_high_time"], format="%H:%M", errors="coerce").dt.time
+    import datetime as _dt
+
+    d["_mcap_m"] = pd.to_numeric(d["market_cap"], errors="coerce") / 1e6
+    conds = {
+        "PMH cohort (baseline)": pd.Series(True, index=d.index),
+        "PM high before 08:00": pd.Series([t is not pd.NaT and t is not None
+                                           and t < _dt.time(8, 0) for t in pmt],
+                                          index=d.index),
+        "PM high 08:00+ (late)": pd.Series([t is not pd.NaT and t is not None
+                                            and t >= _dt.time(8, 0) for t in pmt],
+                                           index=d.index),
+        "mcap < $30M": d["_mcap_m"] < 30,
+        "mcap $30-150M": (d["_mcap_m"] >= 30) & (d["_mcap_m"] < 150),
+        "mcap >= $150M": d["_mcap_m"] >= 150,
+        "US country": d["country"].astype(str).str.upper().eq("US"),
+        "non-US": ~d["country"].astype(str).str.upper().eq("US"),
+        "open $0.2-1": d["open"] < 1,
+        "open $1-3": (d["open"] >= 1) & (d["open"] < 3),
+        "open $3-7": d["open"] >= 3,
+        "gap 12-40%": d["gap_pct"] < 40,
+        "gap >=40%": d["gap_pct"] >= 40,
+    }
+    rows = ["SECOND-FILTER SEARCH on the PMH-break cohort (full grid, all cells):"]
+    for name, mask in conds.items():
+        s = d.loc[mask.fillna(False), "_net"]
+        if len(s) < 60:
+            continue
+        star = " *" if s.mean() >= 0.015 and len(s) >= 250 else ""
+        rows.append(f"  {name:<24} n={len(s):>4}  net {100*s.mean():+6.2f}%  "
+                    f"win {100*(s>0).mean():.0f}%{star}")
+    rows.append("  (* = clears the wiring bar: n>=250 AND net>=+1.5%)")
+    return rows
+
+
+def regime_interaction(df: pd.DataFrame) -> list[str]:
+    """Merge each PMH-cohort trade with THAT DAY's market character: does the
+    ladder do better on hot-tape days? This is the throttle's real test -
+    outcomes, not counts."""
+    p = Path("smallcaplab_data/market_character_daily.csv")
+    if not p.exists():
+        return []
+    m = pd.read_csv(p)
+    d = df[(df["open"] >= MIN_PRICE) & (df["open"] <= MAX_PRICE)].copy()
+    entry = d["open"] * (1 + ENTRY_GAIN) * (1 + CAP)
+    trig = (d["high"] >= entry) & (d["high"] > d["pm_high"])
+    d, entry = d[trig].copy(), entry[trig]
+    hi, lo, close = d["high"], d["low"], d["close"]
+    h1, h2 = hi >= entry * RUNGS[0], hi >= entry * RUNGS[1]
+    proc = np.where(h1, RUNG_FRAC * RUNGS[0], 0) + np.where(h2, RUNG_FRAC * RUNGS[1], 0)
+    rem = 1.0 - RUNG_FRAC * (h1.astype(int) + h2.astype(int))
+    floor = h1 & (lo <= entry)
+    d["_net"] = np.maximum(proc + rem * (np.where(floor, entry, close) / entry)
+                           - 1 - COST_PCT, -1.0)
+    d = d.merge(m[["date", "n_gappers", "fade_rate"]],
+                left_on="date", right_on="date", how="left")
+    hot = d["n_gappers"] >= 4
+    lofade = d["fade_rate"] <= 60
+    rows = ["REGIME INTERACTION (PMH-cohort trades vs that day's tape):"]
+    for name, mask in {"hot day (>=4 gappers)": hot, "quiet day (<4)": ~hot,
+                       "low-fade day (<=60%)": lofade,
+                       "high-fade day (>60%)": ~lofade}.items():
+        s = d.loc[mask.fillna(False), "_net"]
+        if len(s) >= 60:
+            rows.append(f"  {name:<24} n={len(s):>4}  net {100*s.mean():+6.2f}%  "
+                        f"win {100*(s>0).mean():.0f}%")
+    rows.append("  (a big spread here justifies the pre-market regime throttle)")
+    return rows
+
+
 def runner_analysis() -> list[str]:
     """The user's core thesis: 'these can go 3+ dollars in a day, a 3x.' The
     runner file timestamps when each mover crossed +50/+75/+100/+150% - so we
@@ -266,7 +353,8 @@ def main() -> None:
         return
     df = load()
     out = (base_rates(df) + [""] + replay_ladder(df) + [""] + rung_sweep(df)
-           + [""] + entry_filters(df) + [""] + runner_analysis()
+           + [""] + entry_filters(df) + [""] + cohort_refinement(df)
+           + [""] + regime_interaction(df) + [""] + runner_analysis()
            + [""] + regime_analysis() + [""] + hod_timing(df))
     report = "\n".join(out)
     print(report)

@@ -79,3 +79,6 @@ migrate/ibkr_bundle.zip
 migrate/ibkr_update.zip
 
 .claude/
+
+# SmallCapLab data (their data, keep internal - no redistribution)
+smallcaplab_data/

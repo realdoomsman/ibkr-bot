@@ -27,27 +27,32 @@ import pandas as pd
 log = logging.getLogger("bot.scanner")
 
 # Cumulative fraction of a normal day's volume completed by each half-hour
-# since the open (approximation of the standard U-shape; refined by the lab
-# once data_archive holds enough sessions).
+# since the open (approximation of the standard U-shape; the GENERIC
+# fallback - tracked symbols get their own measured curve, below).
 _CURVE = [0.13, 0.205, 0.265, 0.315, 0.36, 0.40, 0.44, 0.485, 0.535,
           0.595, 0.67, 0.78, 1.00]
 
 ENRICH_CACHE = Path("data_cache/enrich")
+PROFILE_CACHE = Path("data_cache/rvol_profiles")
 
 
-def expected_volume_fraction(now_et: dt.datetime) -> float:
-    """Fraction of an average day's volume normally done by `now_et`."""
+def expected_volume_fraction(now_et: dt.datetime,
+                             curve: list[float] | None = None) -> float:
+    """Fraction of an average day's volume normally done by `now_et`.
+    `curve` = a per-symbol measured curve; default = the generic U-shape."""
+    c = curve if curve and len(curve) == len(_CURVE) else _CURVE
     mins = (now_et.hour - 9) * 60 + now_et.minute - 30
     if mins <= 0:
         return 0.02
-    slot = min(int(mins // 30), len(_CURVE) - 1)
-    prev = _CURVE[slot - 1] if slot > 0 else 0.0
+    slot = min(int(mins // 30), len(c) - 1)
+    prev = c[slot - 1] if slot > 0 else 0.0
     frac_in = min(1.0, (mins - slot * 30) / 30)
-    return min(1.0, prev + (_CURVE[slot] - prev) * frac_in)
+    return min(1.0, prev + (c[slot] - prev) * frac_in)
 
 
 def rvol_estimate(cum_volume_today: float, avg_daily_volume: float,
-                  now_et: dt.datetime) -> float | None:
+                  now_et: dt.datetime,
+                  curve: list[float] | None = None) -> float | None:
     """RVOL = today's volume so far vs normal-by-now. >3 = genuinely in play.
 
     Best-effort: both inputs come from sources with unit quirks (IBKR bars
@@ -55,10 +60,83 @@ def rvol_estimate(cum_volume_today: float, avg_daily_volume: float,
     until the lab calibrates it against our own archive."""
     if not avg_daily_volume or avg_daily_volume <= 0:
         return None
-    expected = avg_daily_volume * expected_volume_fraction(now_et)
+    expected = avg_daily_volume * expected_volume_fraction(now_et, curve)
     if expected <= 0:
         return None
     return round(cum_volume_today / expected, 2)
+
+
+def curve_from_bars(bars: pd.DataFrame, min_days: int = 10) -> list[float] | None:
+    """A symbol's own cumulative intraday volume curve (13 half-hour slots)
+    from 5-min RTH bars spanning multiple sessions. Median across days (a
+    single halt/news day must not warp the profile); normalized to end at
+    1.0; None when fewer than `min_days` usable sessions."""
+    try:
+        rth = bars[[dt.time(9, 30) <= t.time() < dt.time(16, 0)
+                    for t in bars["date"]]]
+        if not len(rth):
+            return None
+        day_curves = []
+        for _, day in rth.groupby([t.date() for t in rth["date"]]):
+            total = float(day["volume"].sum())
+            if total <= 0 or len(day) < 30:  # skip halt-shortened/thin days
+                continue
+            cum, slots = 0.0, []
+            for s in range(13):
+                end = dt.time(9 + (30 + (s + 1) * 30) // 60,
+                              (30 + (s + 1) * 30) % 60)
+                in_slot = day[[t.time() < end for t in day["date"]]]
+                slots.append(float(in_slot["volume"].sum()) / total)
+            day_curves.append(slots)
+        if len(day_curves) < min_days:
+            return None
+        arr = pd.DataFrame(day_curves)
+        curve = [round(float(arr[s].median()), 4) for s in range(13)]
+        # monotone + terminal 1.0 by construction of cumulative sums; guard:
+        curve[-1] = 1.0
+        return curve
+    except Exception:
+        return None
+
+
+def build_symbol_curve(symbol: str, sessions: int = 20) -> list[float] | None:
+    """Fetch + cache (7 days) a symbol's measured curve. NETWORK: call this
+    from TASK contexts only (radar capture) - the engine reads cache via
+    cached_symbol_curve() and never pays a network round-trip."""
+    try:
+        from bot import polygon
+
+        if not polygon.available():
+            return None
+        cached = cached_symbol_curve(symbol, max_age_days=7)
+        if cached is not None:
+            return cached
+        PROFILE_CACHE.mkdir(parents=True, exist_ok=True)
+        end = dt.date.today()
+        start = end - dt.timedelta(days=int(sessions * 1.6) + 3)
+        bars = polygon.minute_bars(symbol, end.isoformat(), minutes=5,
+                                   start=start.isoformat())
+        curve = curve_from_bars(bars) if bars is not None else None
+        if curve:
+            (PROFILE_CACHE / f"{symbol.lower()}.json").write_text(
+                json.dumps({"date": dt.date.today().isoformat(),
+                            "curve": curve}), encoding="utf-8")
+        return curve
+    except Exception:
+        log.debug("curve build failed for %s", symbol, exc_info=True)
+        return None
+
+
+def cached_symbol_curve(symbol: str,
+                        max_age_days: int = 10) -> list[float] | None:
+    """Cache-only read - safe in the trading loop (no network, ever)."""
+    try:
+        c = json.loads((PROFILE_CACHE / f"{symbol.lower()}.json")
+                       .read_text(encoding="utf-8"))
+        age = (dt.date.today() - dt.date.fromisoformat(c["date"])).days
+        return c["curve"] if age <= max_age_days else None
+    except Exception:
+        return None
 
 
 def edge_spread_pct(bars) -> float | None:

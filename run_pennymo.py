@@ -818,7 +818,8 @@ def main() -> None:
                                 # joins corrupt features after splits).
                                 from zoneinfo import ZoneInfo
 
-                                from bot.scanner import (edge_spread_pct,
+                                from bot.scanner import (cached_symbol_curve,
+                                                         edge_spread_pct,
                                                          rvol_estimate,
                                                          split_mismatch)
 
@@ -840,7 +841,11 @@ def main() -> None:
                                         # IBKR reports US-stock bar volume in
                                         # LOTS of 100; Yahoo's avg is shares.
                                         float(tb["volume"].sum()) * 100,
-                                        dv * 1e6 / pr, now_et)
+                                        dv * 1e6 / pr, now_et,
+                                        # per-symbol curve when the radar has
+                                        # warmed one (cache read - no network
+                                        # in the trading loop, ever)
+                                        curve=cached_symbol_curve(symbol))
                                 sp = edge_spread_pct(bars)
                             except Exception:
                                 pass

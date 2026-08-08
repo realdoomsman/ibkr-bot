@@ -146,6 +146,17 @@ def capture_today(radar: pd.DataFrame, extra: list[str],
             log.info("RADAR skip %s: security type %s (not common stock)",
                      row["symbol"], en["sec_type"])
             continue
+        try:
+            # Warm the symbol's OWN intraday volume curve (weekly cache) so
+            # the engine's RVOL reads it with zero network cost. Task-context
+            # network is fine; the engine only ever calls the cache reader.
+            from bot.scanner import build_symbol_curve
+
+            if build_symbol_curve(row["symbol"]):
+                log.info("RVOL curve ready for %s (per-symbol, 20-session)",
+                         row["symbol"])
+        except Exception:
+            pass
         news = ""
         arts = []
         try:

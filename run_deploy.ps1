@@ -13,7 +13,11 @@ $before = git rev-parse HEAD 2>$null
 git pull --ff-only 2>&1 | Write-Host
 $after = git rev-parse HEAD 2>$null
 if ($before -ne $after) {
-    Write-Host "Code updated: $($before?.Substring(0,7)) -> $($after?.Substring(0,7))" -ForegroundColor Green
+    # No ?. operator here: the scheduled task runs Windows PowerShell 5.1,
+    # which parses null-conditionals as errors (cosmetic, but noisy).
+    $b = if ($before) { $before.Substring(0, 7) } else { "?" }
+    $a = if ($after) { $after.Substring(0, 7) } else { "?" }
+    Write-Host "Code updated: $b -> $a" -ForegroundColor Green
     & "$Root\.venv\Scripts\python.exe" -m pip install -r "$Root\migrate\requirements.txt" --quiet
     # The dashboard keeps serving old code until restarted:
     Get-CimInstance Win32_Process -Filter "Name='python.exe'" |

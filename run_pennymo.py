@@ -76,8 +76,12 @@ RUNG_FRAC = 1 / 3
 TRAIL = 0.10               # last third trails 10% below its high-water mark
 BREAKEVEN_FLOOR = True     # after rung 1 banks, exit the rest if price
                            # round-trips to entry (never give a winner back)
-ENTRY_CUTOFF = dt.time(15, 0)  # no fresh entries in the last hour - too
-                               # little runway before the mandatory flatten
+ENTRY_CUTOFF = dt.time(15, 45)  # user directive 2026-08-10: trade the WHOLE
+# session. Only the last 10 min stay closed - that window belongs to the
+# 15:55 EOD flatten (an entry racing the flatten's cancel->sell sequence is
+# the stale-cache double-sell class of bug again). Late entries have less
+# rung runway before the forced flatten; the review buckets entries by time
+# so the Sept gate can judge late vs early on evidence.
 STATE_FILE = Path("pennymo_state.json")
 
 # Symbols this sleeve must NEVER trade: the other sleeves' instruments.

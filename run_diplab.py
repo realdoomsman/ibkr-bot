@@ -53,11 +53,19 @@ def replay_dip(bars: pd.DataFrame, retrace: float) -> dict | None:
     if len(rth) < 12:
         return None
     run_hi, entry, entry_i = 0.0, None, None
+    day_open = float(rth.iloc[0]["open"])
     rows = list(rth.itertuples())
     for i, b in enumerate(rows):
         run_hi = max(run_hi, float(b.high))
+        # V2 CAUSAL GATE (v1 was lookahead-contaminated): the dip trigger
+        # only ARMS once the stock is ALREADY a big runner at that moment
+        # (running high >= +50% over open). v1 admitted entries whose "big
+        # runner" status was earned AFTER the dip - crediting the buy with
+        # a rip nobody could have known about. Spike first, THEN dip.
+        if run_hi < day_open * (1 + MIN_RUN):
+            continue
         level = run_hi * (1 - retrace)
-        if float(b.low) <= level and b.date.time() <= CUTOFF and run_hi > 0:
+        if float(b.low) <= level and b.date.time() <= CUTOFF:
             entry, entry_i = level, i
             break
     if entry is None:

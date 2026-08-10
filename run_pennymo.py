@@ -117,8 +117,11 @@ def pm_high_today(broker: Broker, symbol: str):
     return v, t
 
 
-def notify(title: str, msg: str) -> None:
-    """Push to the user's phone via the watchdog's ntfy topic. Best effort."""
+def notify(title: str, msg: str, priority: str = "high",
+           tags: str = "rotating_light") -> None:
+    """Push to the user's phone via the watchdog's ntfy topic. Best effort.
+    Default priority/tags = alarm style; trade notifications pass
+    priority='default' so they inform without ringing like a fire drill."""
     try:
         import urllib.request
 
@@ -128,7 +131,7 @@ def notify(title: str, msg: str) -> None:
         if topic:
             req = urllib.request.Request(
                 f"https://ntfy.sh/{topic}", data=msg.encode("utf-8"),
-                headers={"Title": title, "Priority": "high", "Tags": "rotating_light"})
+                headers={"Title": title, "Priority": priority, "Tags": tags})
             urllib.request.urlopen(req, timeout=10)
     except Exception:
         log.debug("ntfy push failed", exc_info=True)
@@ -453,6 +456,10 @@ def manage(symbol: str, state: dict, broker: Broker, risk: RiskManager, last: fl
             save_state(state)
             journal(symbol, "SELL", "penny_rung", qty=tranche, filled=sold, signal_price=last,
                     note=f"[penny] rung {i + 1} @ +{100 * (mult - 1):.0f}% from {entry:.2f}")
+            notify(f"Penny SELL: {symbol} +{100 * (mult - 1):.0f}%",
+                   f"Rung {i + 1} banked: sold {sold} @ ~${last:.2f} "
+                   f"(entry ${entry:.2f}). Remainder rides.",
+                   priority="default", tags="moneybag")
             break
 
     qty = broker.settled_position_qty(symbol, expected_max=known_max)
@@ -479,6 +486,10 @@ def manage(symbol: str, state: dict, broker: Broker, risk: RiskManager, last: fl
                     note=f"[penny] breakeven floor, entry={entry:.2f}")
             if broker.wait_order_done(trade) >= qty:  # order-confirmed, cache-proof
                 del positions[symbol]
+                notify(f"Penny SELL: {symbol} breakeven floor",
+                       f"Closed remaining {qty} at ~${last:.2f} (entry "
+                       f"${entry:.2f}) - rung-1 profit kept, no round-trip.",
+                       priority="default", tags="shield")
         elif qty == 0:
             del positions[symbol]
         save_state(state)
@@ -500,6 +511,11 @@ def manage(symbol: str, state: dict, broker: Broker, risk: RiskManager, last: fl
                     note=f"[penny] trail exit, hw={st['hw']:.2f}")
             if broker.wait_order_done(trade) >= qty:  # order-confirmed, cache-proof
                 del positions[symbol]
+                notify(f"Penny SELL: {symbol} moon bag closed",
+                       f"Trail hit: sold {qty} @ ~${last:.2f} "
+                       f"({100 * (last / entry - 1):+.0f}% from entry "
+                       f"${entry:.2f}, high-water ${st['hw']:.2f}).",
+                       priority="default", tags="rocket")
         elif qty == 0:
             del positions[symbol]
         save_state(state)
@@ -545,6 +561,13 @@ def flatten_all(state: dict, broker: Broker, risk: RiskManager) -> bool:
                 if broker.wait_order_done(trade) >= qty:
                     state["positions"].pop(symbol, None)
                     save_state(state)
+                    fp = getattr(broker, "last_fill_price", 0) or 0
+                    notify(f"Penny SELL: {symbol} EOD flatten",
+                           f"Closed {qty} before the bell"
+                           + (f" @ ~${fp:.2f} ({100 * (fp / entry - 1):+.0f}% "
+                              f"from entry ${entry:.2f})" if fp and entry else "")
+                           + ". Day's result booked.",
+                           priority="default", tags="checkered_flag")
                 else:
                     clean = False
                 continue
@@ -642,6 +665,10 @@ def try_enter(symbol: str, state: dict, broker: Broker, risk: RiskManager,
                  f"rvol={rvol if rvol is not None else '?'}, "
                  f"spread={spread if spread is not None else '?'}%, "
                  f"nbbo={nbbo_spread if nbbo_spread is not None else '?'}% tier={tier}")
+    notify(f"Penny BUY: {symbol}",
+           f"Bought {got} @ ~${entry_px:.2f} (~${got * entry_px:,.0f}). "
+           f"Ladder +8%/+15%, 10% trail, breakeven floor on.",
+           priority="default", tags="chart_with_upwards_trend")
     return True  # rvol + spread are LOGGED evidence, not gates (yet)
 
 

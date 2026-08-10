@@ -355,6 +355,35 @@ def main() -> None:
     with REVIEW_LOG.open("a", encoding="utf-8") as f:
         f.write(report + "\n\n" + "#" * 64 + "\n\n")
 
+    # Daily phone summary (the 16:50 --days 1 run only): "did it trade today?"
+    # must never require an RDP session. Quiet priority - news, not alarms.
+    if args.days == 1:
+        try:
+            import urllib.request
+
+            from run_watchdog import _ntfy_topic
+
+            topic = _ntfy_topic()
+            if topic:
+                if trips:
+                    body = (f"{len(trips)} round trip(s), P&L ${gross:+,.2f}, "
+                            f"win rate {100 * len(wins) / len(trips):.0f}%. ")
+                elif executions:
+                    body = (f"{len(executions)} execution(s), no completed "
+                            f"round trips (positions may span days). ")
+                else:
+                    body = "No trades today. "
+                body += ("Process CLEAN." if process_flags == 0
+                         else f"{process_flags} process item(s) flagged - "
+                              f"see latest_review.txt on the VM.")
+                req = urllib.request.Request(
+                    f"https://ntfy.sh/{topic}", data=body.encode("utf-8"),
+                    headers={"Title": f"Daily review {now.date().isoformat()}",
+                             "Priority": "default", "Tags": "clipboard"})
+                urllib.request.urlopen(req, timeout=10)
+        except Exception:
+            pass  # the phone summary must never fail the review itself
+
 
 if __name__ == "__main__":
     main()

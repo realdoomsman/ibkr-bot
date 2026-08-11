@@ -751,9 +751,10 @@ def main() -> None:
             log.exception("Legacy stop sweep failed")
         save_state(state)
         log.info("Penny sleeve up. Equity $%s | managing %s | $%.0f/entry, "
-                 "rungs +15/+30, trail %d%%, breakeven floor %s | EOD FLATTEN "
-                 "15:55 | no intraday stops | DELAYED DATA - entries ~15min late",
+                 "rungs +%d/+%d, trail %d%%, breakeven floor %s | EOD FLATTEN "
+                 "15:55 | no intraday stops (user directive)",
                  f"{equity:,.0f}", list(state["positions"]) or "nothing", BUDGET,
+                 round(100 * (RUNGS[0] - 1)), round(100 * (RUNGS[1] - 1)),
                  int(TRAIL * 100), "ON" if BREAKEVEN_FLOOR else "off")
 
         scans = 0
@@ -765,6 +766,9 @@ def main() -> None:
                     dt.datetime.now().isoformat(timespec="seconds"), encoding="utf-8")
             except Exception:
                 pass
+            if phase == "premarket":
+                broker.ib.sleep(20)  # 9:28 start, 9:30 bell - wait, never exit
+                continue
             if phase == "closed":
                 if not args.once:
                     log.info("Market closed. All positions were flattened before "

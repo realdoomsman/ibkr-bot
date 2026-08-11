@@ -45,12 +45,21 @@ FLATTEN_AT = dt.time(15, 55)  # start flattening 5 minutes before the bell
 
 
 def market_phase(now: dt.datetime | None = None) -> str:
-    """'open', 'flatten', or 'closed' (weekends yes; US holidays are not
-    tracked - on a holiday every scan simply finds no fresh bars)."""
+    """'premarket', 'open', 'flatten', or 'closed' (weekends yes; US holidays
+    are not tracked - on a holiday every scan simply finds no fresh bars).
+
+    'premarket' exists because the engines START at 9:28, two minutes before
+    the bell. Treating pre-open as 'closed' made every scheduled start exit
+    immediately - the fleet's oldest bug, masked for a week by louder
+    failures (TWS down, connections refused, manual mid-day starts) and
+    finally expressed on 2026-08-11, the first morning everything else
+    worked. Pre-open means WAIT, never exit."""
     now = now or dt.datetime.now(NY)
     if now.weekday() >= 5:
         return "closed"
     t = now.time()
+    if t < MARKET_OPEN:
+        return "premarket"
     if MARKET_OPEN <= t < FLATTEN_AT:
         return "open"
     if FLATTEN_AT <= t < MARKET_CLOSE:
@@ -302,6 +311,10 @@ def main() -> None:
                     log.warning("Reconnect failed - will retry next scan")
                     broker.ib.sleep(icfg.scan_minutes * 60)
                     continue
+
+            if phase == "premarket":
+                broker.ib.sleep(20)  # the bell is minutes away - wait for it
+                continue
 
             if phase == "open":
                 # The cap gates ENTRIES only - exits, stops, and repairs must

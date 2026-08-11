@@ -180,9 +180,17 @@ def main() -> None:
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     ap = argparse.ArgumentParser()
     ap.add_argument("--sessions", type=int, default=90)
+    ap.add_argument("--lo", type=float, default=None,
+                    help="alternate price band low (user 2026-08-11: test $2-300)")
+    ap.add_argument("--hi", type=float, default=None)
     args = ap.parse_args()
     if not polygon.available():
         raise SystemExit("POLYGON_API_KEY not set (env var or polygon_key.txt)")
+    global LO, HI, CACHE
+    if args.lo is not None and args.hi is not None:
+        # Alternate band = its own cache; never contaminate the penny study.
+        LO, HI = args.lo, args.hi
+        CACHE = Path(f"polylab_events_{int(args.lo)}_{int(args.hi)}.csv")
     _, lines = study(args.sessions)
     print("\n".join(lines))
 

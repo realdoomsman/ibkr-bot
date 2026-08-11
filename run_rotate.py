@@ -31,8 +31,10 @@ log = logging.getLogger("bot.rotate")
 CONFIG = Path("config.yaml")
 RESERVED = {"SPY", "QQQ"}  # the ETF sleeves' instruments - never in baskets
 BASKET_SIZE = 4  # aggressive profile: four symbols per basket
-INTRA_RULE = dict(max_price=5.0, min_dvol=50.0, rank="dollar_vol_m")
-DAILY_RULE = dict(max_price=20.0, min_dvol=100.0, rank="ann_vol")
+# User directive 2026-08-11: trade $2-300, not penny stocks. Both baskets
+# now draw from the full real-priced universe (min_price guards the bottom).
+INTRA_RULE = dict(max_price=300.0, min_price=2.0, min_dvol=50.0, rank="dollar_vol_m")
+DAILY_RULE = dict(max_price=300.0, min_price=2.0, min_dvol=100.0, rank="ann_vol")
 CLIENT_ID = 48
 
 
@@ -177,12 +179,14 @@ def main() -> None:
 
     intra_cands = sorted(
         (r for r in scored
-         if r["price"] <= INTRA_RULE["max_price"] and r["dollar_vol_m"] >= INTRA_RULE["min_dvol"]),
+         if INTRA_RULE["min_price"] <= r["price"] <= INTRA_RULE["max_price"]
+         and r["dollar_vol_m"] >= INTRA_RULE["min_dvol"]),
         key=lambda r: -r[INTRA_RULE["rank"]],
     )
     daily_cands = sorted(
         (r for r in scored
-         if r["price"] <= DAILY_RULE["max_price"] and r["dollar_vol_m"] >= DAILY_RULE["min_dvol"]),
+         if DAILY_RULE["min_price"] <= r["price"] <= DAILY_RULE["max_price"]
+         and r["dollar_vol_m"] >= DAILY_RULE["min_dvol"]),
         key=lambda r: -r[DAILY_RULE["rank"]],
     )
 

@@ -65,7 +65,14 @@ SCAN_MINUTES = 5
 REFRESH_EVERY = 6          # re-run the mover screen every 6 scans (~30 min)
 ENTRY_GAIN = 0.12          # today's move from the open that counts as "moving"
 NEAR_HIGH = 0.85           # must still be within 15% of the day's high
-MIN_PRICE, MAX_PRICE = 0.20, 7.0
+# User directive 2026-08-11: "$2 to $300, not penny stocks" - the sleeve
+# now hunts real-priced movers. Same funnel (+12% over open, PMH break,
+# early high, dilution/halt/China vetoes); note the filter EVIDENCE
+# (+2.5%/90% cohort) was measured on the old $0.20-7 band - the mechanics
+# carry, the numbers re-prove themselves at the gate on the new band.
+# (Research tailwind: the sub-$5 lottery tier has measured NEGATIVE drift;
+# $5+ "stocks in play" is where the documented intraday edges live.)
+MIN_PRICE, MAX_PRICE = 2.00, 300.0
 MIN_DVOL_M = 3.0           # $3M/day min - "high volume" for the penny tier
 RUNGS = (1.08, 1.15)       # DCA-out levels: +8% and +15% FROM ENTRY. Entry is
                            # already ~13% above the open, so these = roughly

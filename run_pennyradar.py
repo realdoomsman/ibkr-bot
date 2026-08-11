@@ -30,7 +30,10 @@ log = logging.getLogger("bot.pennyradar")
 
 RADAR_CSV = Path("penny_radar.csv")
 NEWS_EXTRA = Path("news_extra.txt")
-MAX_PRICE = 5.0
+# User directive 2026-08-11: $2-300, not penny stocks. The radar watches
+# the band the sleeve trades.
+MIN_PRICE = 2.0
+MAX_PRICE = 300.0
 MIN_DVOL_M = 1.0          # watch-only floor - deliberately tiny
 TOP_N = 8
 COLS = ["date", "symbol", "captured", "price", "dollar_vol_m", "ann_vol", "best_day",
@@ -77,7 +80,7 @@ def capture_today(radar: pd.DataFrame, extra: list[str],
         # instead of on the screener's delayed pass. Fail-open.
         from bot import polygon
 
-        snap = polygon.snapshot_movers(min_pct=10.0, lo=0.20, hi=MAX_PRICE,
+        snap = polygon.snapshot_movers(min_pct=10.0, lo=MIN_PRICE, hi=MAX_PRICE,
                                        min_dvol_m=MIN_DVOL_M)
         if snap:
             log.info("Polygon snapshot: %d live movers >=+10%% merged (top: %s)",
@@ -115,7 +118,8 @@ def capture_today(radar: pd.DataFrame, extra: list[str],
                 log.warning("%s: no scoreable data", sym)
             continue
         forced = row["symbol"] in extra
-        if forced or (row["price"] <= MAX_PRICE and row["dollar_vol_m"] >= MIN_DVOL_M):
+        if forced or (MIN_PRICE <= row["price"] <= MAX_PRICE
+                      and row["dollar_vol_m"] >= MIN_DVOL_M):
             scored.append((forced, row))
     scored.sort(key=lambda fr: (not fr[0], -(fr[1]["big_moves_3m"] or 0)))
 

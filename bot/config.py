@@ -34,7 +34,13 @@ GAMBLING_TICKERS = {
     "LNW", "ACEL", "AGS", "SGHC", "BETR", "IMAX",  # IMAX excluded: often
     # miscategorized by screeners; harmless to skip one theater chain.
 }
-BLOCKED_SYMBOLS = ETF_BLOCKLIST | GAMBLING_TICKERS
+# Names the user has banned by direct instruction, enforced fleet-wide
+# (radar capture, mover sleeve, rotation baskets, watchdog banned-held).
+USER_BLOCKLIST = {
+    "PLTR", "PLNTR",  # user directive 2026-08-12: "Dont buy PLNTR stock"
+                      # (PLTR = Palantir; both spellings blocked, zero cost)
+}
+BLOCKED_SYMBOLS = ETF_BLOCKLIST | GAMBLING_TICKERS | USER_BLOCKLIST
 
 
 @dataclass

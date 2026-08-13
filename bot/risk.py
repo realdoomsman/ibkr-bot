@@ -97,12 +97,18 @@ class RiskManager:
             return True
         return False
 
-    def sanity_check_order(self, symbol: str, qty: int, price: float, equity: float) -> tuple[bool, str]:
-        """Last line of defense against fat-finger / buggy orders."""
+    def sanity_check_order(self, symbol: str, qty: int, price: float, equity: float,
+                           max_pct: float | None = None) -> tuple[bool, str]:
+        """Last line of defense against fat-finger / buggy orders.
+
+        `max_pct` lets a sleeve declare its own per-position ceiling (the
+        penny sleeve sizes at 30% by user directive 2026-08-12) without
+        loosening the default cap every other sleeve is judged against."""
         if qty <= 0:
             return False, "quantity must be positive"
         notional = qty * price
-        max_notional = self.effective_capital(equity) * self.cfg.max_position_pct * 1.05
+        max_notional = self.effective_capital(equity) \
+            * (max_pct or self.cfg.max_position_pct) * 1.05
         if notional > max_notional:
             return False, (
                 f"order for {symbol} is ${notional:,.0f}, exceeds per-position "

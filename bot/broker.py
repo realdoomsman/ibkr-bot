@@ -224,6 +224,7 @@ class Broker:
         cap_pct: float = 0.005,
         wait_s: int = 8,
         cancel_unfilled: bool = True,
+        risk_cap_pct: float | None = None,
     ) -> int:
         """Risk-gated BUY via a capped (marketable) limit order.
 
@@ -243,7 +244,8 @@ class Broker:
             log.warning("BLOCKED BUY %s x%d: %s", symbol, qty, reason)
             journal(symbol, "BUY", "blocked_entry", qty=qty, signal_price=last_price, note=reason)
             return 0
-        ok, reason = risk.sanity_check_order(symbol, qty, last_price, equity)
+        ok, reason = risk.sanity_check_order(symbol, qty, last_price, equity,
+                                             max_pct=risk_cap_pct)
         if not ok:
             log.warning("BLOCKED BUY %s x%d: %s", symbol, qty, reason)
             journal(symbol, "BUY", "blocked_entry", qty=qty, signal_price=last_price, note=reason)

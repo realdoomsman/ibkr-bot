@@ -58,7 +58,12 @@ from run_intraday import market_phase
 log = logging.getLogger("bot.pennymo")
 
 CLIENT_ID = 49
-BUDGET = 2000.0            # dollars per entry - the user's chosen clip size
+# User directive 2026-08-12: entries sized at 30% OF THE ACCOUNT (was a
+# fixed $2,000 ~= 10%). With MAX_OPEN=3 that is up to ~90% of equity
+# deployed at once in no-stop positions - consequence stated, user owns it.
+# Sized off LIVE equity at entry time; FALLBACK_BUDGET if the read fails.
+ENTRY_FRACTION = 0.30
+FALLBACK_BUDGET = 6000.0
 MAX_NEW_PER_DAY = 2
 MAX_OPEN = 3
 SCAN_MINUTES = 5
@@ -642,15 +647,21 @@ def try_enter(symbol: str, state: dict, broker: Broker, risk: RiskManager,
     if symbol in broker.pending_order_symbols(actions=("BUY",)):
         return False
 
-    qty = int(BUDGET // last)
+    try:
+        budget = ENTRY_FRACTION * broker.net_liquidation()
+    except Exception:
+        budget = FALLBACK_BUDGET  # equity read failed - fixed clip, never skip
+    qty = int(budget // last)
     if qty < 1 or qty * last < 300:
         return False
 
-    log.info("%s: MOVER at %.2f - entering ~$%.0f (%d shares)", symbol, last, qty * last, qty)
+    log.info("%s: MOVER at %.2f - entering ~$%.0f (%d shares, %d%% of equity)",
+             symbol, last, qty * last, qty, int(ENTRY_FRACTION * 100))
     entered_today.append(symbol)  # counts even if unfilled - no repeat chasing
     save_state(state)             # persisted BEFORE the order: crash != re-chase
     filled = broker.submit_entry_limit(symbol, qty, risk, last,
-                                       cap_pct=0.01, wait_s=8, cancel_unfilled=True)
+                                       cap_pct=0.01, wait_s=8, cancel_unfilled=True,
+                                       risk_cap_pct=ENTRY_FRACTION)
     pos = broker.position_qty(symbol)
     got = max(pos, filled)        # order fills can lead the position cache
     if got <= 0:
@@ -761,10 +772,11 @@ def main() -> None:
         except Exception:
             log.exception("Legacy stop sweep failed")
         save_state(state)
-        log.info("Penny sleeve up. Equity $%s | managing %s | $%.0f/entry, "
-                 "rungs +%d/+%d, trail %d%%, breakeven floor %s | EOD FLATTEN "
-                 "15:55 | no intraday stops (user directive)",
-                 f"{equity:,.0f}", list(state["positions"]) or "nothing", BUDGET,
+        log.info("Penny sleeve up. Equity $%s | managing %s | %d%% of equity"
+                 "/entry (~$%.0f), rungs +%d/+%d, trail %d%%, breakeven floor "
+                 "%s | EOD FLATTEN 15:55 | no intraday stops (user directive)",
+                 f"{equity:,.0f}", list(state["positions"]) or "nothing",
+                 int(ENTRY_FRACTION * 100), ENTRY_FRACTION * equity,
                  round(100 * (RUNGS[0] - 1)), round(100 * (RUNGS[1] - 1)),
                  int(TRAIL * 100), "ON" if BREAKEVEN_FLOOR else "off")
 

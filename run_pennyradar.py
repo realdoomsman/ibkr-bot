@@ -33,7 +33,7 @@ NEWS_EXTRA = Path("news_extra.txt")
 # User directive 2026-08-11: $2-300, not penny stocks. The radar watches
 # the band the sleeve trades.
 MIN_PRICE = 2.0
-MAX_PRICE = 300.0
+MAX_PRICE = 1000.0  # covers the mover sleeve's full band (user 2026-08-13)
 MIN_DVOL_M = 1.0          # watch-only floor - deliberately tiny
 TOP_N = 8
 COLS = ["date", "symbol", "captured", "price", "dollar_vol_m", "ann_vol", "best_day",

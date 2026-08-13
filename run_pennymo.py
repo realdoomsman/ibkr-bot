@@ -70,18 +70,20 @@ SCAN_MINUTES = 5
 REFRESH_EVERY = 6          # re-run the mover screen every 6 scans (~30 min)
 ENTRY_GAIN = 0.12          # today's move from the open that counts as "moving"
 NEAR_HIGH = 0.85           # must still be within 15% of the day's high
-# Band history: user directive 2026-08-11 AM said "$2-300, not penny
-# stocks"; the same-evening survivorship-free replay JUDGED both bands
-# (user then delegated: "whatever u think its good"):
+# Band history (every change measured before/at wiring):
 #   PMH-break cohort by price tier (net/trade, win, n):
-#     sub-$1   +5.36%  66%  n=713     <- the edge lives HERE
+#     sub-$1   +5.36%  66%  n=713
 #     $1-3     +2.82%  52%  n=1,188
-#     $3-7     -0.16%  44%  n=1,470   <- flat
-#     $2-300   -1.15%  39%  n=4,293   <- this setup LOSES on big stocks
-# This weapon is a low-price phenomenon. Band = the two profitable tiers.
-# Big-priced "stocks in play" get their own strategy (ORB harness) in the
-# LAB first - a transplanted penny playbook tests negative there.
-MIN_PRICE, MAX_PRICE = 0.20, 3.00
+#     $3-7     -0.16%  44%  n=1,470
+#     $2-300   -1.15%  39%  n=4,293
+#     $5-100   -1.52%  37%  n=3,225  (break+early -1.31%, n=2,083)
+# 2026-08-11: evidence set 0.20-3.00 (user delegated).
+# 2026-08-13: USER DIRECTIVE overrides - "pick between $5-$100" then
+# "$5-$1000" top, confirmed via question, WITH the -1.3%/trade measurement
+# stated to them first. Their account, their call, ON RECORD; the Sept-4
+# gate judges live results vs the band evidence. ORB harness for this
+# territory remains the queued lab build.
+MIN_PRICE, MAX_PRICE = 5.00, 1000.0
 MIN_DVOL_M = 3.0           # $3M/day min - "high volume" for the penny tier
 RUNGS = (1.08, 1.15)       # DCA-out levels: +8% and +15% FROM ENTRY. Entry is
                            # already ~13% above the open, so these = roughly

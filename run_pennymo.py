@@ -64,6 +64,15 @@ CLIENT_ID = 49
 # Sized off LIVE equity at entry time; FALLBACK_BUDGET if the read fails.
 ENTRY_FRACTION = 0.30
 FALLBACK_BUDGET = 6000.0
+
+# Dip-buy SHADOW LOGGER (2026-08-14): the user's SCKT hypothesis cleared the
+# causal replay bar (diplab v2: first -15% retrace on an established big
+# runner = +6.2%/64% win over 337 events, avg further drawdown -22%). NO
+# ORDERS - would-be entries are journaled (kind=shadow_dip_entry) so the
+# Sept-4 gate judges replay + live shadow evidence together before wiring.
+SHADOW_DIP_ARM = 1.50       # running high >= +50% over today's open arms it
+SHADOW_DIP_RETRACE = 0.15   # first -15% pullback off the running high
+SHADOW_DIP_LOGGED: dict = {}  # symbol -> date logged (once per day)
 MAX_NEW_PER_DAY = 2
 MAX_OPEN = 3
 SCAN_MINUTES = 5
@@ -157,6 +166,41 @@ def notify(title: str, msg: str, priority: str = "high",
             urllib.request.urlopen(req, timeout=10)
     except Exception:
         log.debug("ntfy push failed", exc_info=True)
+
+
+def shadow_dip_check(symbol: str, bars) -> None:
+    """Journal the FIRST would-be dip-buy of the day (no order, ever): once a
+    scanned name's running high reaches +50% over its open, the first bar
+    whose low pierces 15% off that high is the shadow entry. Fail-open."""
+    try:
+        today = dt.date.today().isoformat()
+        if SHADOW_DIP_LOGGED.get(symbol) == today:
+            return
+        tb = todays_bars(bars)
+        if not len(tb):
+            return
+        day_open = float(tb["open"].iloc[0])
+        if day_open <= 0:
+            return
+        run_hi = 0.0
+        for _, b in tb.iterrows():
+            run_hi = max(run_hi, float(b["high"]))
+            if run_hi < day_open * SHADOW_DIP_ARM:
+                continue
+            level = run_hi * (1 - SHADOW_DIP_RETRACE)
+            if float(b["low"]) <= level:
+                SHADOW_DIP_LOGGED[symbol] = today
+                log.info("%s: SHADOW dip-buy would trigger at %.2f (run high "
+                         "%.2f, -%d%%) - journal only, NO order", symbol,
+                         level, run_hi, int(SHADOW_DIP_RETRACE * 100))
+                journal(symbol, "BUY", "shadow_dip_entry",
+                        signal_price=round(level, 4),
+                        note=f"[penny] SHADOW dip-buy: run_hi={run_hi:.2f} "
+                             f"(+{100 * (run_hi / day_open - 1):.0f}% over open), "
+                             f"no order placed")
+                return
+    except Exception:
+        log.debug("shadow dip check failed for %s", symbol, exc_info=True)
 
 
 PENNY_SEEN = "tripwire_seen_penny.json"
@@ -831,6 +875,7 @@ def main() -> None:
                     archive_intraday_bars(symbol, bars)
                     if not len(bars):
                         continue
+                    shadow_dip_check(symbol, bars)  # journal-only, never trades
                     if symbol in state["positions"]:
                         manage(symbol, state, broker, risk,
                                float(bars["close"].iloc[-1]))

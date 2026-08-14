@@ -43,6 +43,16 @@ MARKET_OPEN = dt.time(9, 30)
 MARKET_CLOSE = dt.time(16, 0)
 FLATTEN_AT = dt.time(15, 55)  # start flattening 5 minutes before the bell
 
+# CONTROL-GROUP MODE (2026-08-14, after the first live days measured it):
+# this sleeve produced 14 of the fleet's first 15 round trips and nearly all
+# of its losses - chop plus ~$1/fill commissions - exactly what the research
+# predicted for 5-min MA signals (zero published value; this engine was
+# reframed as a cost-measurement experiment in RESEARCH.md). It stays alive
+# at token size as the control group it was meant to be; the mover sleeve
+# carries the offense. Judged again at the Sept-4 gate.
+CONTROL_SIZE_PCT = 0.05    # ~$1k clips (was max_position_pct = 20%)
+CONTROL_MAX_TRADES = 4     # per day (config allows 30 - capped here)
+
 
 def market_phase(now: dt.datetime | None = None) -> str:
     """'premarket', 'open', 'flatten', or 'closed' (weekends yes; US holidays
@@ -136,7 +146,8 @@ def scan_symbol(symbol, icfg, strategy, broker, risk, entry_allowed: bool) -> in
             log.info("%s: entry signal but trade cap reached - watching only", symbol)
             return 0
         equity = broker.net_liquidation()
-        qty = risk.position_size(equity, last)
+        # Control-group sizing - see CONTROL_SIZE_PCT note at the top.
+        qty = int(risk.effective_capital(equity) * CONTROL_SIZE_PCT / last)
         if qty > 0:
             # Second opinion from the trained meta-labeling filter - JOURNALED
             # ONLY, never gates. The nightly review keeps its scoreboard.
@@ -321,7 +332,8 @@ def main() -> None:
                 # always run, or a capped day strands positions unmanaged.
                 for symbol in icfg.symbols:
                     try:
-                        entry_allowed = trades_today < icfg.max_trades_per_day
+                        entry_allowed = trades_today < min(icfg.max_trades_per_day,
+                                                           CONTROL_MAX_TRADES)
                         trades_today += scan_symbol(
                             symbol, icfg, strategy, broker, risk, entry_allowed
                         )

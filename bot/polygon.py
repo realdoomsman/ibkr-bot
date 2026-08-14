@@ -368,6 +368,37 @@ def ticker_news(symbol: str, limit: int = 5) -> list[dict]:
     return news_items(js, symbol)
 
 
+def revenue_growth_from(js: dict | None) -> float | None:
+    """TTM revenue growth from a /vX/reference/financials payload: latest
+    four quarters' revenues vs the prior four. None when unknowable."""
+    try:
+        rows = (js or {}).get("results") or []
+        revs = []
+        for r in rows:
+            v = (((r.get("financials") or {}).get("income_statement") or {})
+                 .get("revenues") or {}).get("value")
+            if v is not None:
+                revs.append(float(v))
+        if len(revs) < 8:
+            return None
+        latest, prior = sum(revs[:4]), sum(revs[4:8])
+        if prior <= 0:
+            return None
+        return round(latest / prior - 1, 4)
+    except Exception:
+        return None
+
+
+def ttm_revenue_growth(symbol: str) -> float | None:
+    """Year-over-year trailing-twelve-month revenue growth (the 'earnings'
+    half of the user's growth spec; revenue beats EPS for coverage and
+    manipulation-resistance). None on any failure - fail-open."""
+    js = _get("/vX/reference/financials",
+              {"ticker": symbol.upper(), "limit": 8, "timeframe": "quarterly",
+               "order": "desc", "sort": "period_of_report_date"})
+    return revenue_growth_from(js)
+
+
 def trade_at(symbol: str, when_et: dt.datetime) -> tuple[float | None, float | None]:
     """(price, ts_seconds_offset) of the first trade at/after an ET datetime -
     the markout rig's probe. Offset = how long after the asked time the trade

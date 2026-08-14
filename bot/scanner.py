@@ -127,6 +127,16 @@ def build_symbol_curve(symbol: str, sessions: int = 20) -> list[float] | None:
         return None
 
 
+def cached_enrich(symbol: str) -> dict:
+    """Cache-only read of today's enrichment - no network, engine-safe."""
+    try:
+        c = json.loads((ENRICH_CACHE / f"{symbol.lower()}.json")
+                       .read_text(encoding="utf-8"))
+        return c if c.get("date") == dt.date.today().isoformat() else {}
+    except Exception:
+        return {}
+
+
 def cached_symbol_curve(symbol: str,
                         max_age_days: int = 10) -> list[float] | None:
     """Cache-only read - safe in the trading loop (no network, ever)."""
@@ -279,6 +289,13 @@ def enrich_symbol(symbol: str) -> dict:
             if out["ipo_months"] is None and ov.get("list_date"):
                 d = dt.date.fromisoformat(ov["list_date"])
                 out["ipo_months"] = round((dt.date.today() - d).days / 30.44, 1)
+            # TTM revenue growth (user's growth spec, 2026-08-14): growthlab
+            # showed growth+volume lifts every cell it touches at multi-day
+            # horizons; journaled on intraday entries so the gate can test
+            # whether it separates winners intraday too. Task-context call.
+            g = polygon.ttm_revenue_growth(symbol)
+            if g is not None:
+                out["rev_growth"] = g
     except Exception:
         log.debug("polygon enrich failed for %s", symbol, exc_info=True)
     # Cache only real data: an all-None result from a transient hiccup

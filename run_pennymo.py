@@ -743,11 +743,18 @@ def try_enter(symbol: str, state: dict, broker: Broker, risk: RiskManager,
         tier = spread_tier(nbbo_spread if nbbo_spread is not None else spread)
     except Exception:
         tier = "unknown"
+    try:
+        from bot.scanner import cached_enrich
+
+        growth = cached_enrich(symbol).get("rev_growth", "?")
+    except Exception:
+        growth = "?"
     journal(symbol, "BUY", "penny_entry", qty=qty, filled=got, signal_price=last,
             note=f"[penny] jeet ladder +8/+15, trail {int(TRAIL * 100)}%, floor on, "
                  f"rvol={rvol if rvol is not None else '?'}, "
                  f"spread={spread if spread is not None else '?'}%, "
-                 f"nbbo={nbbo_spread if nbbo_spread is not None else '?'}% tier={tier}")
+                 f"nbbo={nbbo_spread if nbbo_spread is not None else '?'}% tier={tier}, "
+                 f"growth={growth}")
     notify(f"Penny BUY: {symbol}",
            f"Bought {got} @ ~${entry_px:.2f} (~${got * entry_px:,.0f}). "
            f"Ladder +8%/+15%, 10% trail, breakeven floor on.",

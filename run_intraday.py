@@ -53,6 +53,12 @@ FLATTEN_AT = dt.time(15, 55)  # start flattening 5 minutes before the bell
 CONTROL_SIZE_PCT = 0.05    # ~$1k clips (was max_position_pct = 20%)
 CONTROL_MAX_TRADES = 4     # per day (config allows 30 - capped here)
 
+# User directive 2026-08-14: no NEW entries in the first/last 15 minutes
+# (opening range mints the day's extremes; the close is the flatten's turf).
+# Exits are never gated - the 15:55 flatten is its own standing directive.
+ENTRY_OPEN_START = dt.time(9, 45)
+ENTRY_CLOSE_STOP = dt.time(15, 45)
+
 
 def market_phase(now: dt.datetime | None = None) -> str:
     """'premarket', 'open', 'flatten', or 'closed' (weekends yes; US holidays
@@ -144,6 +150,11 @@ def scan_symbol(symbol, icfg, strategy, broker, risk, entry_allowed: bool) -> in
     if target > 0 and current_qty == 0:
         if not entry_allowed:
             log.info("%s: entry signal but trade cap reached - watching only", symbol)
+            return 0
+        now_t = dt.datetime.now(NY).time()
+        if now_t < ENTRY_OPEN_START or now_t >= ENTRY_CLOSE_STOP:
+            log.info("%s: entry signal inside a no-entry window (first/last "
+                     "15 min, user directive) - watching only", symbol)
             return 0
         equity = broker.net_liquidation()
         # Control-group sizing - see CONTROL_SIZE_PCT note at the top.

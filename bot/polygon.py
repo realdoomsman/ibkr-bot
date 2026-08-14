@@ -232,6 +232,31 @@ def news_items(js: dict | None, symbol: str) -> list[dict]:
     return out
 
 
+def parse_last_nbbo_sizes(js: dict | None, now_ns: int) \
+        -> tuple[float | None, float | None, float | None]:
+    """(bid_size, ask_size, age_seconds) from a /v2/last/nbbo payload
+    ('s'/'S' = bid/ask sizes). The first-15-minutes demand gate reads this:
+    entries in the opening window need bid size >= 1.5x ask size."""
+    try:
+        res = (js or {}).get("results") or {}
+        bs, as_ = float(res["s"]), float(res["S"])
+        if bs < 0 or as_ <= 0:
+            return None, None, None
+        age = (now_ns - int(res["t"])) / 1e9
+        if age < -60:
+            return None, None, None
+        return bs, as_, max(0.0, age)
+    except Exception:
+        return None, None, None
+
+
+def last_nbbo_sizes(symbol: str) -> tuple[float | None, float | None, float | None]:
+    """(bid_size, ask_size, age_s) - real-time book pressure at the NBBO.
+    Entry-path caller: short timeout, fails to (None, None, None)."""
+    js = _get(f"/v2/last/nbbo/{symbol.upper()}", timeout=5)
+    return parse_last_nbbo_sizes(js, time.time_ns())
+
+
 def parse_last_nbbo(js: dict | None, now_ns: int) -> tuple[float | None, float | None]:
     """(spread %% of mid, age_seconds) from a /v2/last/nbbo payload
     ('p'/'P' = bid/ask prices, 't' = SIP nanoseconds)."""

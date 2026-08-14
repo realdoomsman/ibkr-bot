@@ -3,7 +3,8 @@
 import datetime as dt
 
 from bot.polygon import (df_from_aggs, movers_from_snapshot, news_items,
-                         overview_fields, parse_last_nbbo, parse_last_trade,
+                         overview_fields, parse_last_nbbo,
+                         parse_last_nbbo_sizes, parse_last_trade,
                          reverse_splits_from, spread_pct_from_quote)
 
 NOW_NS = 1_800_000_000_000_000_000
@@ -52,6 +53,22 @@ def test_parse_last_nbbo_good():
     s, age = parse_last_nbbo(js, NOW_NS)
     assert s == 1.980
     assert 2.9 < age < 3.1
+
+
+def test_parse_last_nbbo_sizes_good():
+    # bid size 's'=900 vs ask size 'S'=300 -> 3x demand, quoted 3s ago
+    js = {"results": {"s": 900, "S": 300, "t": NOW_NS - 3_000_000_000}}
+    bs, ask_sz, age = parse_last_nbbo_sizes(js, NOW_NS)
+    assert bs == 900 and ask_sz == 300
+    assert 2.9 < age < 3.1
+
+
+def test_parse_last_nbbo_sizes_malformed():
+    assert parse_last_nbbo_sizes({"results": {"s": 900, "S": 0,
+                                              "t": NOW_NS}}, NOW_NS) \
+        == (None, None, None)  # zero ask size = unusable ratio
+    assert parse_last_nbbo_sizes({}, NOW_NS) == (None, None, None)
+    assert parse_last_nbbo_sizes(None, NOW_NS) == (None, None, None)
 
 
 def test_parse_last_nbbo_crossed_or_malformed():

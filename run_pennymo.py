@@ -74,16 +74,15 @@ SHADOW_DIP_ARM = 1.50       # running high >= +50% over today's open arms it
 SHADOW_DIP_RETRACE = 0.15   # first -15% pullback off the running high
 SHADOW_DIP_LOGGED: dict = {}  # symbol -> date logged (once per day)
 
-# User directive 2026-08-14: no NEW trades 9:30-9:45 (the opening range
-# "typically makes the day's highs and lows") UNLESS the premarket looks
-# good AND there is solid demand on the buy orders. Mechanized: the sleeve
-# already requires an early-premarket-high BREAK (the premarket-quality
-# half); the demand half = NBBO bid size >= DEMAND_RATIO x ask size
-# (Polygon real-time book). FAIL-CLOSED inside the window: can't read the
-# book -> wait for 9:45. Entries after 15:45 were already blocked
-# (ENTRY_CUTOFF); EXITS always run - the 15:55 flatten is its own directive.
-ENTRY_START = dt.time(9, 45)
-DEMAND_RATIO = 1.5
+# Opening-window history: 2026-08-14 the user barred entries 9:30-9:45
+# unless premarket strength + solid bid demand (mechanized as an NBBO
+# bid>=1.5x-ask gate, fail-closed). 2026-08-27 the user REVERSED it:
+# "Allow it to trade from 9:30" - the gate is removed; entries run from
+# the bell. The PMH-break/early-high filters (evidence-based) still apply
+# at all times; entries after 15:45 stay blocked (flatten's turf); EXITS
+# always run. The gate code lived at the entry branch - see git history
+# (44a6357) if it ever needs resurrecting.
+ENTRY_START = dt.time(9, 30)  # from the bell (user 2026-08-27)
 MAX_NEW_PER_DAY = 2
 MAX_OPEN = 3
 SCAN_MINUTES = 5
@@ -933,32 +932,8 @@ def main() -> None:
                                             signal_price=last,
                                             note=f"[penny] late PM high {pmh_t}")
                                 continue
-                            # FIRST-15-MIN GATE (user directive 2026-08-14):
-                            # inside 9:30-9:45 an entry additionally needs
-                            # SOLID BUY-SIDE DEMAND - NBBO bid size >= 1.5x
-                            # ask size. Fail-closed: unreadable book = wait.
-                            # Does NOT consume the one-attempt-per-day.
-                            if dt.datetime.now().time() < ENTRY_START:
-                                demand_ok = False
-                                try:
-                                    from bot import polygon
-
-                                    bs, ask_sz, bage = \
-                                        polygon.last_nbbo_sizes(symbol)
-                                    demand_ok = (bs is not None and ask_sz
-                                                 and bage is not None
-                                                 and bage <= 30
-                                                 and bs >= DEMAND_RATIO * ask_sz)
-                                except Exception:
-                                    demand_ok = False
-                                if not demand_ok:
-                                    log.info("%s: mover in the opening 15 min "
-                                             "without demand confirmation - "
-                                             "waiting for 9:45", symbol)
-                                    continue
-                                log.info("%s: opening-window entry ALLOWED - "
-                                         "early PMH broken and bid-side demand "
-                                         ">= %.1fx ask", symbol, DEMAND_RATIO)
+                            # (Opening-window demand gate removed 2026-08-27
+                            # by user directive - entries run from the bell.)
                             rv, sp = None, None
                             try:
                                 # RVOL (logged, not gated) + EDGE spread

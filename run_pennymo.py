@@ -756,7 +756,7 @@ def try_enter(symbol: str, state: dict, broker: Broker, risk: RiskManager,
                  f"rvol={rvol if rvol is not None else '?'}, "
                  f"spread={spread if spread is not None else '?'}%, "
                  f"nbbo={nbbo_spread if nbbo_spread is not None else '?'}% tier={tier}, "
-                 f"growth={growth}")
+                 f"growth={growth}, pmh_t={PM_HIGHS.get(symbol, (None, None, None))[2]}")
     notify(f"Penny BUY: {symbol}",
            f"Bought {got} @ ~${entry_px:.2f} (~${got * entry_px:,.0f}). "
            f"Ladder +8%/+15%, 10% trail, breakeven floor on.",
@@ -920,21 +920,15 @@ def main() -> None:
                                          "(%.2f <= %.2f) - waiting for the "
                                          "break", symbol, last, pmh)
                                 continue
-                            # EARLY-HIGH filter (2nd evidence-based edit): a
-                            # PM high set at/after 08:00 = the spike is
-                            # already extended into the open; its break nets
-                            # -1.35% vs +2.50% for early highs. Skip the day.
-                            if pmh is not None and pmh_t is not None \
-                                    and pmh_t >= dt.time(8, 0):
-                                if symbol not in LATE_PMH_LOGGED:
-                                    LATE_PMH_LOGGED.add(symbol)
-                                    log.info("%s: PM high set late (%s) - "
-                                             "skipping today (early-high "
-                                             "filter)", symbol, pmh_t)
-                                    journal(symbol, "BUY", "blocked_entry",
-                                            signal_price=last,
-                                            note=f"[penny] late PM high {pmh_t}")
-                                continue
+                            # EARLY-HIGH filter RETIRED as a gate (2026-08-27,
+                            # user: aggression includes stock selection).
+                            # History: wired 08-08 from SmallCapLab (+2.50%
+                            # early vs -1.35% late); polylab replication
+                            # showed the increment ~nil (band-wide wash;
+                            # +0.2pp on the current band) while rejecting
+                            # ~1/3 of break-cohort candidates. PM-high TIME
+                            # is now journaled evidence on every entry - the
+                            # gate re-judges it with live data.
                             # (Opening-window demand gate removed 2026-08-27
                             # by user directive - entries run from the bell.)
                             rv, sp = None, None

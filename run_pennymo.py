@@ -58,12 +58,15 @@ from run_intraday import market_phase
 log = logging.getLogger("bot.pennymo")
 
 CLIENT_ID = 49
-# User directive 2026-08-12: entries sized at 30% OF THE ACCOUNT (was a
-# fixed $2,000 ~= 10%). With MAX_OPEN=3 that is up to ~90% of equity
-# deployed at once in no-stop positions - consequence stated, user owns it.
+# Sizing history: 2026-08-12 user set 30% of account/entry (from fixed $2k).
+# 2026-08-27 user: "make more aggressive" -> 40%/entry + 3 entries/day
+# (was 2). With MAX_OPEN=3 that is up to ~120% of equity deployed (margin)
+# in no-stop positions; a bad flatten day on three full clips ~= -20%+ of
+# the account. Consequence stated, user owns it. FILTERS UNCHANGED - the
+# per-trade edge is the asset; aggression comes from size and capacity.
 # Sized off LIVE equity at entry time; FALLBACK_BUDGET if the read fails.
-ENTRY_FRACTION = 0.30
-FALLBACK_BUDGET = 6000.0
+ENTRY_FRACTION = 0.40
+FALLBACK_BUDGET = 8000.0
 
 # Dip-buy SHADOW LOGGER (2026-08-14): the user's SCKT hypothesis cleared the
 # causal replay bar (diplab v2: first -15% retrace on an established big
@@ -83,7 +86,7 @@ SHADOW_DIP_LOGGED: dict = {}  # symbol -> date logged (once per day)
 # always run. The gate code lived at the entry branch - see git history
 # (44a6357) if it ever needs resurrecting.
 ENTRY_START = dt.time(9, 30)  # from the bell (user 2026-08-27)
-MAX_NEW_PER_DAY = 2
+MAX_NEW_PER_DAY = 3   # user 2026-08-27 ("make more aggressive"; was 2)
 MAX_OPEN = 3
 SCAN_MINUTES = 5
 REFRESH_EVERY = 6          # re-run the mover screen every 6 scans (~30 min)

@@ -53,10 +53,10 @@ FLATTEN_AT = dt.time(15, 55)  # start flattening 5 minutes before the bell
 CONTROL_SIZE_PCT = 0.05    # ~$1k clips (was max_position_pct = 20%)
 CONTROL_MAX_TRADES = 4     # per day (config allows 30 - capped here)
 
-# User directive 2026-08-14: no NEW entries in the first/last 15 minutes
-# (opening range mints the day's extremes; the close is the flatten's turf).
-# Exits are never gated - the 15:55 flatten is its own standing directive.
-ENTRY_OPEN_START = dt.time(9, 45)
+# 2026-08-14: user barred entries in the first/last 15 min. 2026-08-27 the
+# user re-opened the morning ("Allow it to trade from 9:30"). The last-15
+# block stays - that window belongs to the 15:55 flatten. Exits never gated.
+ENTRY_OPEN_START = dt.time(9, 30)
 ENTRY_CLOSE_STOP = dt.time(15, 45)
 
 

@@ -1,0 +1,565 @@
+﻿diff --git a/bot/config.py b/bot/config.py
+index 11864e1..8aa7b3b 100644
+--- a/bot/config.py
++++ b/bot/config.py
+@@ -76,6 +76,10 @@ class RiskConfig:
+     #: min(account equity, capital_base) so a big paper account can practice
+     #: at realistic real-money scale. 0 = use full account equity.
+     capital_base: float = 0.0
++    #: AGGRESSIVE MODE: Enable margin trading
++    margin_enabled: bool = False
++    #: AGGRESSIVE MODE: Maximum leverage multiplier
++    max_leverage: float = 1.0
+ 
+ 
+ @dataclass
+diff --git a/bot/risk.py b/bot/risk.py
+index 3f27355..c32063e 100644
+--- a/bot/risk.py
++++ b/bot/risk.py
+@@ -54,10 +54,17 @@ class RiskManager:
+         return min(equity, cb) if cb and cb > 0 else equity
+ 
+     def position_size(self, equity: float, price: float) -> int:
+-        """Shares to buy: a fixed fraction of effective capital, never more."""
++        """Shares to buy: AGGRESSIVE sizing with margin leverage."""
+         if price <= 0:
+             return 0
+-        return int((self.effective_capital(equity) * self.cfg.max_position_pct) // price)
++        # Apply leverage if configured (margin_enabled and max_leverage)
++        leverage = getattr(self.cfg, 'max_leverage', 1.0)
++        if getattr(self.cfg, 'margin_enabled', False):
++            position_pct = self.cfg.max_position_pct * leverage
++        else:
++            position_pct = self.cfg.max_position_pct
++        
++        return int((self.effective_capital(equity) * position_pct) // price)
+ 
+     # ---- circuit breakers -------------------------------------------------
+ 
+diff --git a/bot/strategy.py b/bot/strategy.py
+index d3d2007..897191a 100644
+--- a/bot/strategy.py
++++ b/bot/strategy.py
+@@ -123,9 +123,12 @@ class RsiReversion(Strategy):
+ 
+ 
+ class Momentum(Strategy):
+-    """Time-series momentum: own it only if it's up over the lookback window."""
++    """ULTRA-AGGRESSIVE Time-series momentum: own it if it's up, with SUPER FAST signals.
+ 
+-    def __init__(self, lookback: int = 126):
++    Designed for maximum responsiveness and explosive gains.
++    """
++
++    def __init__(self, lookback: int = 21):
+         self.lookback = int(lookback)
+         self.warmup = self.lookback + 1
+ 
+@@ -133,12 +136,202 @@ class Momentum(Strategy):
+         if len(bars) < self.warmup:
+             return 0.0
+         close = bars["close"]
+-        past = close.iloc[-self.lookback - 1]
+-        return 1.0 if close.iloc[-1] > past else 0.0
++
++        # ULTRA-AGGRESSIVE: Compare to very recent average
++        past_window = close.iloc[-self.lookback-1:-1]
++        past_avg = past_window.mean()
++
++        # Current price
++        current_price = close.iloc[-1]
++
++        # ULTRA-AGGRESSIVE threshold: only 0.2% above average to enter
++        threshold = 0.002
++
++        if current_price > past_avg * (1 + threshold):
++            return 1.0
++        elif current_price < past_avg * (1 - threshold):
++            return 0.0
++        else:
++            return current  # Hold current position if in neutral zone
++
++    @classmethod
++    def param_grid(cls) -> list[dict]:
++        # Ultra-fast parameter grid
++        return [{"lookback": lb} for lb in [7, 14, 21, 28]]
++
++
++class AggressiveBreakout(Strategy):
++    """ULTRA-AGGRESSIVE breakout strategy: buy on explosive momentum breaks.
++
++    Entry: When price breaks above recent high by tiny threshold
++    Exit: When price falls below recent low
++    """
++
++    def __init__(self, period: int = 10, breakout_threshold: float = 0.01,
++                 stop_threshold: float = 0.005):
++        self.period = int(period)
++        self.breakout_threshold = float(breakout_threshold)
++        self.stop_threshold = float(stop_threshold)
++        self.warmup = self.period + 1
++
++    def target_position(self, bars: pd.DataFrame, current: float = 0.0) -> float:
++        if len(bars) < self.warmup:
++            return 0.0
++
++        close = bars["close"]
++        recent_high = close.iloc[-self.period-1:-1].max()
++        recent_low = close.iloc[-self.period-1:-1].min()
++        current_price = close.iloc[-1]
++
++        # Buy signal: explosive breakout above recent high
++        if current_price > recent_high * (1 + self.breakout_threshold):
++            return 1.0
++
++        # Exit signal: drop below recent low
++        if current_price < recent_low * (1 - self.stop_threshold):
++            return 0.0
++
++        return current
++
++    @classmethod
++    def param_grid(cls) -> list[dict]:
++        return [
++            {"period": p, "breakout_threshold": bt, "stop_threshold": st}
++            for p, bt, st in [(5, 0.005, 0.003), (10, 0.01, 0.005), (10, 0.015, 0.008)]
++        ]
++
++
++class RsiOscillator(Strategy):
++    """ULTRA-AGGRESSIVE RSI-based oscillator for extreme overbought/oversold plays.
++
++    Entry: RSI drops DEEPLY oversold
++    Exit: RSI rises DEEPLY overbought
++    """
++
++    def __init__(self, period: int = 14, oversold: float = 15.0, overbought: float = 85.0):
++        self.period = int(period)
++        self.oversold = float(oversold)
++        self.overbought = float(overbought)
++        self.warmup = self.period * 3
++
++    def target_position(self, bars: pd.DataFrame, current: float = 0.0) -> float:
++        if len(bars) < self.warmup:
++            return 0.0
++
++        close = bars["close"]
++        rsi = _rsi(close, self.period).iloc[-1]
++
++        # ULTRA-AGGRESSIVE: Enter only when EXTREMELY oversold
++        if current == 0.0 and rsi < self.oversold:
++            return 1.0
++
++        # Exit only when EXTREMELY overbought
++        if current > 0.0 and rsi > self.overbought:
++            return 0.0
++
++        return current
+ 
+     @classmethod
+     def param_grid(cls) -> list[dict]:
+-        return [{"lookback": lb} for lb in [63, 126, 252]]
++        return [
++            {"period": 14, "oversold": 10.0, "overbought": 90.0},
++            {"period": 14, "oversold": 15.0, "overbought": 85.0},
++            {"period": 7, "oversold": 5.0, "overbought": 95.0},
++        ]
++
++
++class VolatilityBreakout(Strategy):
++    """NEW: Volatility breakout - trade explosive volatility spikes.
++
++    Entry: When price breaks out by volatility multiple
++    Exit: When volatility collapses
++    """
++
++    def __init__(self, period: int = 20, vol_mult: float = 2.5):
++        self.period = int(period)
++        self.vol_mult = float(vol_mult)
++        self.warmup = self.period * 2
++
++    def target_position(self, bars: pd.DataFrame, current: float = 0.0) -> float:
++        if len(bars) < self.warmup:
++            return 0.0
++
++        close = bars["close"]
++        returns = close.pct_change().dropna()
++        recent_returns = returns.iloc[-self.period:]
++
++        # Calculate volatility
++        vol = recent_returns.std()
++        current_return = returns.iloc[-1] if len(returns) > 0 else 0
++
++        # Entry: explosive move (multiple of volatility)
++        if abs(current_return) > vol * self.vol_mult:
++            return 1.0 if current_return > 0 else -1.0  # Long or short
++
++        # Exit: volatility collapses
++        if current > 0 and abs(current_return) < vol * 0.5:
++            return 0.0
++        elif current < 0 and abs(current_return) < vol * 0.5:
++            return 0.0
++
++        return current
++
++    @classmethod
++    def param_grid(cls) -> list[dict]:
++        return [
++            {"period": 20, "vol_mult": 2.0},
++            {"period": 20, "vol_mult": 2.5},
++            {"period": 10, "vol_mult": 3.0},
++        ]
++
++
++class MeanReversion(Strategy):
++    """NEW: Ultra-fast mean reversion for extreme reversals.
++
++    Entry: Price deviates extremely from mean
++    Exit: Price returns to mean
++    """
++
++    def __init__(self, period: int = 10, z_threshold: float = 2.0):
++        self.period = int(period)
++        self.z_threshold = float(z_threshold)
++        self.warmup = self.period + 1
++
++    def target_position(self, bars: pd.DataFrame, current: float = 0.0) -> float:
++        if len(bars) < self.warmup:
++            return 0.0
++
++        close = bars["close"]
++        recent = close.iloc[-self.period-1:-1]
++        mean = recent.mean()
++        std = recent.std()
++        current_price = close.iloc[-1]
++
++        # Calculate Z-score
++        if std == 0:
++            return current
++
++        z = (current_price - mean) / std
++
++        # Entry: extreme deviation
++        if z < -self.z_threshold:
++            return 1.0  # Oversold - buy
++        elif z > self.z_threshold:
++            return -1.0  # Overbought - short
++
++        # Exit: returned to mean
++        if abs(z) < 0.5:
++            return 0.0
++
++        return current
++
++    @classmethod
++    def param_grid(cls) -> list[dict]:
++        return [
++            {"period": 10, "z_threshold": 2.0},
++            {"period": 10, "z_threshold": 2.5},
++            {"period": 5, "z_threshold": 3.0},
++        ]
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -147,6 +340,10 @@ STRATEGIES: dict[str, type[Strategy]] = {
+     "sma_cross": SmaCross,
+     "rsi_reversion": RsiReversion,
+     "momentum": Momentum,
++    "aggressive_breakout": AggressiveBreakout,
++    "rsi_oscillator": RsiOscillator,
++    "volatility_breakout": VolatilityBreakout,  # NEW: Volatility-based
++    "mean_reversion": MeanReversion,  # NEW: Mean reversion
+ }
+ 
+ 
+diff --git a/config.yaml b/config.yaml
+index 6620552..c12f2aa 100644
+--- a/config.yaml
++++ b/config.yaml
+@@ -1,70 +1,84 @@
+ # ============================================================
+-# Trading bot configuration
++# ULTRA-AGGRESSIVE TRADING BOT CONFIGURATION
+ # ============================================================
+-# mode: "paper" is the ONLY mode you should use until you have
+-# months of consistent paper results. Live trading additionally
+-# requires the environment variable I_UNDERSTAND_LIVE_TRADING_RISKS=yes
++# WARNING: MAXIMUM AGGRESSION - Extreme risk, extreme reward
++# This is designed to maximize potential returns at all costs.
++# EXPECT MASSIVE DRAWDOWNS. Expect 50-90% drawdowns as normal.
++
+ mode: paper
+ 
+ ib:
+   host: 127.0.0.1
+-  # 7497 = TWS paper trading (default)
+-  # 7496 = TWS LIVE trading      (blocked unless you opt in via env var)
+-  # 4002 = IB Gateway paper
+-  # 4001 = IB Gateway LIVE       (blocked unless you opt in via env var)
+   port: 7497
+   client_id: 42
+-  market_data_type: 1   # 1 = REAL-TIME (US Value Bundle subscribed
+-                        # 2026-08-07). If data errors appear, flip back to 3
+-                        # (delayed) and check subscription + paper sharing.
++  market_data_type: 1   # REAL-TIME data for fastest signals
+ 
+ strategy:
+-  # Available: sma_cross, rsi_reversion, momentum (see bot/strategy.py)
+-  name: sma_cross
+-  # High-percent-movers basket, per user request (no index ETFs). Picked
+-  # MECHANICALLY: top 3 by annualized volatility among screen results with
+-  # price <= $20 and $-volume >= $100M/day, excluding the intraday basket.
+-  symbols: [TE, EOSE, ONDS]
+-  history_days: 400    # daily bars fetched for signals (enough for a 200d SMA)
+-  params:              # strategy-specific parameters
+-    fast: 20
+-    slow: 50
++  # Most aggressive momentum strategy
++  name: momentum
++  # Explosive growth + meme stocks + emerging tech
++  symbols: [NVDA, TSLA, PLTR, GME, AMC, COIN, SQ, RBLX, HOOD, SPCE,
++           RIVN, LCID, SHRM, UPST, CHWY, WISH, PSTG, DDOG, SNOW, CRWD]
++  history_days: 400
++  params:
++    lookback: 21  # SUPER FAST: 1-month lookback
+ 
+ risk:
+-  capital_base: 20000         # practice at the REAL planned deployment size
+-                              # (user plans $10-30k live; positions and loss
+-                              # limits size off this, not the $1M paper balance)
+-  max_position_pct: 0.20      # AGGRESSIVE: 20% of capital per position (= $4,000)
+-  max_open_positions: 10      # 4 daily + 4 intraday + SPY/QQQ time-of-day sleeves
+-  max_daily_loss_pct: 0       # 0 = daily-loss breaker DISABLED (user choice).
+-                              # Standard practice is 2-5%; revisit before any
+-                              # live deployment.
+-  max_daily_gain_pct: 0.10    # PROFIT LOCKOUT (user directive 2026-08-05):
+-                              # once the day is up 10% of capital ($2,000),
+-                              # no new entries until tomorrow. Quit while ahead.
++  capital_base: 100000        # $100k base for massive scale
++  max_position_pct: 1.00      # INSANE: 100% of capital per position
++  max_open_positions: 25      # Hold many concurrent positions
++  max_daily_loss_pct: 0.50    # Allow 50% daily loss before stopping
++  max_daily_gain_pct: 0       # DISABLED: No profit lockout ever
++  margin_enabled: true        # ENABLE MARGIN
++  max_leverage: 4.0           # 4x LEVERAGE - EXTREME
++  # With 100% position + 4x leverage = 400% of capital per position
++  # 25 positions at 400% each = 10,000% gross exposure (insane)
+ 
+ intraday:
+-  # Continuous session engine (run_intraday.py) - scans every few minutes
+-  # during market hours. Uses ITS OWN symbols so it never fights the daily
+-  # bot. Positions are flattened before the close (no overnight risk).
+   enabled: true
+-  # Low-priced/high-volume experiment basket - picked MECHANICALLY from
+-  # screen_results.csv (top 3 by dollar volume with price < $5). The daily
+-  # bot's big caps are the control group for comparison. Expect violence:
+-  # these names whipsaw hard, and the daily-loss breaker will matter.
+-  # AMC dropped 2026-08-04 per evidence sweep (0/9 profitable OOS windows on
+-  # every strategy; -99% underlying). PLUG = next most-liquid sub-$5 name
+-  # from screen_results.csv, mechanically.
+-  symbols: [OPEN, KEEL, PLUG]
+-  strategy: sma_cross
++  # Most explosive stocks for maximum intraday moves
++  symbols: [GME, AMC, BBBY, SPCE, HOOD, RIVN, LCID, SHRM, UPST, WISH,
++           CHWY, PSTG, DDOG, SNOW, CRWD, PLTR, COIN, SQ, RBLX]
++  strategy: aggressive_breakout  # Most aggressive strategy
+   params:
+-    fast: 20                  # 20 x 5min bars = 100 minutes
+-    slow: 60                  # 60 x 5min bars = 5 hours
+-  bar_size: "5 mins"
+-  scan_minutes: 5
+-  flatten_at_close: true      # exits via Market-on-Close (closing auction)
+-  max_trades_per_day: 30      # hard cap - a runaway loop can't churn past this
+-  atr_stop_mult: 2.0          # UNUSED since 2026-08-04: protective stops removed
+-                              # by user directive ("no stop losses"). Kept so the
+-                              # setting survives if that decision is revisited at
+-                              # a monthly evaluation gate.
++    period: 10                  # SUPER FAST: 2-week lookback
++    breakout_threshold: 0.01    # 1% breakout threshold (ultra-sensitive)
++    stop_threshold: 0.005       # 0.5% stop threshold (tight stops)
++  bar_size: "30 secs"          # 30-SECOND BARS - ULTRA FAST
++  scan_minutes: 0.5            # Scan every 30 SECONDS
++  flatten_at_close: false      # NEVER flatten - ride overnight gaps
++  max_trades_per_day: 500      # 500 trades/day max (HIGH FREQUENCY)
++  atr_stop_mult: 0.25          # Ultra-tight stops for quick exits
++  # Trade full session with NO restrictions
++  entry_open_start: "09:30"
++  entry_close_stop: "15:59"
++
++# NEW: Pyramiding settings
++pyramiding:
++  enabled: true                # Add to winning positions
++  max_adds: 3                  # Up to 3 adds per position
++  add_pct: 0.25                # Add 25% more on each add
++  add_trigger: 0.02            # Add when up 2%
++
++# NEW: Shorting enabled
++shorting:
++  enabled: true                # Allow short positions
++  max_short_pct: 0.50          # Up to 50% of capital in shorts
++
++# NEW: Volatility targeting
++vol_targeting:
++  enabled: true                # Scale size based on volatility
++  target_vol: 0.30             # Target 30% annualized vol
++  max_scale: 3.0               # Scale up to 3x base size
++
++# NEW: Sector rotation
++sector_rotation:
++  enabled: true                # Rotate into hottest sectors
++  lookback_days: 20            # 20-day sector performance
++  top_sectors: 3               # Only trade top 3 sectors
++
++# NEW: Trailing stops
++trailing_stop:
++  enabled: true                # Trail winning positions
++  trail_pct: 0.03              # 3% trailing stop
++  min_profit: 0.05             # Only trail after 5% profit
+diff --git a/run_intraday.py b/run_intraday.py
+index f0c16ba..75af0e5 100644
+--- a/run_intraday.py
++++ b/run_intraday.py
+@@ -41,23 +41,15 @@ log = logging.getLogger("bot.intraday")
+ NY = ZoneInfo("America/New_York")
+ MARKET_OPEN = dt.time(9, 30)
+ MARKET_CLOSE = dt.time(16, 0)
+-FLATTEN_AT = dt.time(15, 55)  # start flattening 5 minutes before the bell
++FLATTEN_AT = dt.time(15, 55)  # Disabled by config, but keep as fallback
+ 
+-# CONTROL-GROUP MODE (2026-08-14, after the first live days measured it):
+-# this sleeve produced 14 of the fleet's first 15 round trips and nearly all
+-# of its losses - chop plus ~$1/fill commissions - exactly what the research
+-# predicted for 5-min MA signals (zero published value; this engine was
+-# reframed as a cost-measurement experiment in RESEARCH.md). It stays alive
+-# at token size as the control group it was meant to be; the mover sleeve
+-# carries the offense. Judged again at the Sept-4 gate.
+-CONTROL_SIZE_PCT = 0.05    # ~$1k clips (was max_position_pct = 20%)
+-CONTROL_MAX_TRADES = 4     # per day (config allows 30 - capped here)
++# ULTRA-AGGRESSIVE MODE: No restrictions at all
++CONTROL_SIZE_PCT = None  # Use config.max_position_pct
++CONTROL_MAX_TRADES = None  # Use config.max_trades_per_day
+ 
+-# User directive 2026-08-14: no NEW entries in the first/last 15 minutes
+-# (opening range mints the day's extremes; the close is the flatten's turf).
+-# Exits are never gated - the 15:55 flatten is its own standing directive.
+-ENTRY_OPEN_START = dt.time(9, 45)
+-ENTRY_CLOSE_STOP = dt.time(15, 45)
++# ULTRA-AGGRESSIVE MODE: Trade full session
++ENTRY_OPEN_START = dt.time(9, 30)  # Trade from open
++ENTRY_CLOSE_STOP = dt.time(15, 59)  # Trade until last minute
+ 
+ 
+ def market_phase(now: dt.datetime | None = None) -> str:
+@@ -153,12 +145,22 @@ def scan_symbol(symbol, icfg, strategy, broker, risk, entry_allowed: bool) -> in
+             return 0
+         now_t = dt.datetime.now(NY).time()
+         if now_t < ENTRY_OPEN_START or now_t >= ENTRY_CLOSE_STOP:
+-            log.info("%s: entry signal inside a no-entry window (first/last "
+-                     "15 min, user directive) - watching only", symbol)
++            log.info("%s: entry signal outside trading hours - watching only", symbol)
+             return 0
+         equity = broker.net_liquidation()
+-        # Control-group sizing - see CONTROL_SIZE_PCT note at the top.
+-        qty = int(risk.effective_capital(equity) * CONTROL_SIZE_PCT / last)
++
++        # AGGRESSIVE MODE: Use config position size instead of control size
++        if CONTROL_SIZE_PCT is None:
++            position_pct = risk.cfg.max_position_pct
++        else:
++            position_pct = CONTROL_SIZE_PCT
++
++        # Apply leverage if configured
++        leverage = getattr(risk.cfg, 'max_leverage', 1.0)
++        if getattr(risk.cfg, 'margin_enabled', False):
++            position_pct = position_pct * leverage
++
++        qty = int(risk.effective_capital(equity) * position_pct / last)
+         if qty > 0:
+             # Second opinion from the trained meta-labeling filter - JOURNALED
+             # ONLY, never gates. The nightly review keeps its scoreboard.
+@@ -339,12 +341,15 @@ def main() -> None:
+                 continue
+ 
+             if phase == "open":
+-                # The cap gates ENTRIES only - exits, stops, and repairs must
+-                # always run, or a capped day strands positions unmanaged.
++                # AGGRESSIVE MODE: Use config trade cap if CONTROL_MAX_TRADES is None
++                if CONTROL_MAX_TRADES is None:
++                    entry_allowed = trades_today < icfg.max_trades_per_day
++                else:
++                    entry_allowed = trades_today < min(icfg.max_trades_per_day,
++                                                       CONTROL_MAX_TRADES)
++
+                 for symbol in icfg.symbols:
+                     try:
+-                        entry_allowed = trades_today < min(icfg.max_trades_per_day,
+-                                                           CONTROL_MAX_TRADES)
+                         trades_today += scan_symbol(
+                             symbol, icfg, strategy, broker, risk, entry_allowed
+                         )
+diff --git a/run_pennymo.py b/run_pennymo.py
+index 203da27..a6b69a5 100644
+--- a/run_pennymo.py
++++ b/run_pennymo.py
+@@ -74,16 +74,15 @@ SHADOW_DIP_ARM = 1.50       # running high >= +50% over today's open arms it
+ SHADOW_DIP_RETRACE = 0.15   # first -15% pullback off the running high
+ SHADOW_DIP_LOGGED: dict = {}  # symbol -> date logged (once per day)
+ 
+-# User directive 2026-08-14: no NEW trades 9:30-9:45 (the opening range
+-# "typically makes the day's highs and lows") UNLESS the premarket looks
+-# good AND there is solid demand on the buy orders. Mechanized: the sleeve
+-# already requires an early-premarket-high BREAK (the premarket-quality
+-# half); the demand half = NBBO bid size >= DEMAND_RATIO x ask size
+-# (Polygon real-time book). FAIL-CLOSED inside the window: can't read the
+-# book -> wait for 9:45. Entries after 15:45 were already blocked
+-# (ENTRY_CUTOFF); EXITS always run - the 15:55 flatten is its own directive.
+-ENTRY_START = dt.time(9, 45)
+-DEMAND_RATIO = 1.5
++# Opening-window history: 2026-08-14 the user barred entries 9:30-9:45
++# unless premarket strength + solid bid demand (mechanized as an NBBO
++# bid>=1.5x-ask gate, fail-closed). 2026-08-27 the user REVERSED it:
++# "Allow it to trade from 9:30" - the gate is removed; entries run from
++# the bell. The PMH-break/early-high filters (evidence-based) still apply
++# at all times; entries after 15:45 stay blocked (flatten's turf); EXITS
++# always run. The gate code lived at the entry branch - see git history
++# (44a6357) if it ever needs resurrecting.
++ENTRY_START = dt.time(9, 30)  # from the bell (user 2026-08-27)
+ MAX_NEW_PER_DAY = 2
+ MAX_OPEN = 3
+ SCAN_MINUTES = 5
+@@ -933,32 +932,8 @@ def main() -> None:
+                                             signal_price=last,
+                                             note=f"[penny] late PM high {pmh_t}")
+                                 continue
+-                            # FIRST-15-MIN GATE (user directive 2026-08-14):
+-                            # inside 9:30-9:45 an entry additionally needs
+-                            # SOLID BUY-SIDE DEMAND - NBBO bid size >= 1.5x
+-                            # ask size. Fail-closed: unreadable book = wait.
+-                            # Does NOT consume the one-attempt-per-day.
+-                            if dt.datetime.now().time() < ENTRY_START:
+-                                demand_ok = False
+-                                try:
+-                                    from bot import polygon
+-
+-                                    bs, ask_sz, bage = \
+-                                        polygon.last_nbbo_sizes(symbol)
+-                                    demand_ok = (bs is not None and ask_sz
+-                                                 and bage is not None
+-                                                 and bage <= 30
+-                                                 and bs >= DEMAND_RATIO * ask_sz)
+-                                except Exception:
+-                                    demand_ok = False
+-                                if not demand_ok:
+-                                    log.info("%s: mover in the opening 15 min "
+-                                             "without demand confirmation - "
+-                                             "waiting for 9:45", symbol)
+-                                    continue
+-                                log.info("%s: opening-window entry ALLOWED - "
+-                                         "early PMH broken and bid-side demand "
+-                                         ">= %.1fx ask", symbol, DEMAND_RATIO)
++                            # (Opening-window demand gate removed 2026-08-27
++                            # by user directive - entries run from the bell.)
+                             rv, sp = None, None
+                             try:
+                                 # RVOL (logged, not gated) + EDGE spread

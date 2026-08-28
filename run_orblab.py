@@ -48,6 +48,10 @@ TOP_N = 12
 FRICTION = 0.004
 LADDER = (1.04, 1.08)
 CACHE = Path("orblab_events.csv")
+RANGES = (3, 6)  # default: 15-min and 30-min ranges (5-min bars)
+# Literature note (Zarattini/Barbon/Aziz): on their top-RVOL universe the
+# 5-MINUTE range (rb=1 here) was the best by far (Sharpe 2.81 vs 1.43 at
+# 15-min, 0.21 at 30-min) - tested via --ranges 1 into its own cache.
 
 
 def replay_orb(bars: pd.DataFrame, range_bars: int) -> dict | None:
@@ -113,7 +117,7 @@ def scan_session(day: str, prev_day: str) -> list[dict]:
         bars = polygon.minute_bars(r["symbol"], day, minutes=5, adjusted=False)
         if bars is None:
             continue
-        for rb in (3, 6):  # 15-min and 30-min opening ranges
+        for rb in RANGES:  # opening-range lengths in 5-min bars
             got = replay_orb(bars, rb)
             if got:
                 out.append({"day": day, "symbol": r["symbol"],
@@ -149,7 +153,8 @@ def study(sessions: int = 40) -> list[str]:
     lines = [f"ORBLAB - opening-range breakouts on gap-up stocks-in-play "
              f"({prev['day'].nunique()} sessions, {len(prev)} events, "
              f"survivorship-free, raw prices)"]
-    for rb, label in ((3, "15-min range"), (6, "30-min range")):
+    for rb in sorted(set(prev["range_bars"])):
+        label = f"{int(rb) * 5}-min range"
         c = prev[prev["range_bars"] == rb]
         if not len(c):
             continue
@@ -170,9 +175,15 @@ def main() -> None:
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     ap = argparse.ArgumentParser()
     ap.add_argument("--sessions", type=int, default=40)
+    ap.add_argument("--ranges", default=None,
+                    help="comma-sep range lengths in 5-min bars (e.g. '1')")
     args = ap.parse_args()
     if not polygon.available():
         raise SystemExit("POLYGON_API_KEY not set")
+    global RANGES, CACHE
+    if args.ranges:
+        RANGES = tuple(int(x) for x in args.ranges.split(","))
+        CACHE = Path(f"orblab_events_r{'_'.join(map(str, RANGES))}.csv")
     print("\n".join(study(args.sessions)))
 
 

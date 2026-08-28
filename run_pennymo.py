@@ -107,13 +107,17 @@ NEAR_HIGH = 0.85           # must still be within 15% of the day's high
 # territory remains the queued lab build.
 MIN_PRICE, MAX_PRICE = 5.00, 1000.0
 MIN_DVOL_M = 3.0           # $3M/day min - "high volume" for the penny tier
-RUNGS = (1.08, 1.15)       # DCA-out levels: +8% and +15% FROM ENTRY. Entry is
-                           # already ~13% above the open, so these = roughly
-                           # +22% and +30% days from the open - reachable on
-                           # real movers, unlike the old +47% ask (user:
-                           # "most stocks dont go up 30% in a day" - correct).
+# Exit-style history (all measured on the 3,378-event proven cohort):
+#   full ladder (+8/+15/ride)  +2.05%/trade  51% win   <- shipped 08-08..28
+#   RUNG-1 ONLY (+8, 2/3 ride) +2.84%/trade  46% win   <- USER CHOSE 08-28
+#   hold-everything-to-close   +4.07%/trade  43% win
+# Peer-reviewed convergence (Zarattini/Barbon/Aziz; Wu 2020): profit targets
+# are detrimental once selection is right - each rung removed ~ +1pp/trade
+# for ~4pp of win rate. User picked the middle: keep the jeet's first bank
+# (also arms the breakeven floor), free the rest to run to the bell.
+RUNGS = (1.08,)            # single DCA-out level: +8% FROM ENTRY banks 1/3
 RUNG_FRAC = 1 / 3
-TRAIL = 0.10               # last third trails 10% below its high-water mark
+TRAIL = 0.10               # the riding 2/3 trails 10% below high-water
 BREAKEVEN_FLOOR = True     # after rung 1 banks, exit the rest if price
                            # round-trips to entry (never give a winner back)
 ENTRY_CUTOFF = dt.time(15, 45)  # user directive 2026-08-10: trade the WHOLE
@@ -752,14 +756,14 @@ def try_enter(symbol: str, state: dict, broker: Broker, risk: RiskManager,
     except Exception:
         growth = "?"
     journal(symbol, "BUY", "penny_entry", qty=qty, filled=got, signal_price=last,
-            note=f"[penny] jeet ladder +8/+15, trail {int(TRAIL * 100)}%, floor on, "
+            note=f"[penny] rung1-only +8 then ride, trail {int(TRAIL * 100)}%, floor on, "
                  f"rvol={rvol if rvol is not None else '?'}, "
                  f"spread={spread if spread is not None else '?'}%, "
                  f"nbbo={nbbo_spread if nbbo_spread is not None else '?'}% tier={tier}, "
                  f"growth={growth}, pmh_t={PM_HIGHS.get(symbol, (None, None, None))[2]}")
     notify(f"Penny BUY: {symbol}",
            f"Bought {got} @ ~${entry_px:.2f} (~${got * entry_px:,.0f}). "
-           f"Ladder +8%/+15%, 10% trail, breakeven floor on.",
+           f"Rung-1 banks 1/3 at +8%, 2/3 rides (10% trail, breakeven floor).",
            priority="default", tags="chart_with_upwards_trend")
     return True  # rvol + spread are LOGGED evidence, not gates (yet)
 
@@ -838,12 +842,13 @@ def main() -> None:
         except Exception:
             log.exception("Legacy stop sweep failed")
         save_state(state)
+        rungs_txt = "/".join(f"+{round(100 * (r - 1))}%" for r in RUNGS)
         log.info("Penny sleeve up. Equity $%s | managing %s | %d%% of equity"
-                 "/entry (~$%.0f), rungs +%d/+%d, trail %d%%, breakeven floor "
-                 "%s | EOD FLATTEN 15:55 | no intraday stops (user directive)",
+                 "/entry (~$%.0f), rung(s) %s then ride, trail %d%%, breakeven "
+                 "floor %s | EOD FLATTEN 15:55 | no intraday stops (user directive)",
                  f"{equity:,.0f}", list(state["positions"]) or "nothing",
                  int(ENTRY_FRACTION * 100), ENTRY_FRACTION * equity,
-                 round(100 * (RUNGS[0] - 1)), round(100 * (RUNGS[1] - 1)),
+                 rungs_txt,
                  int(TRAIL * 100), "ON" if BREAKEVEN_FLOOR else "off")
 
         scans = 0

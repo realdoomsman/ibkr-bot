@@ -185,6 +185,34 @@ def notify(title: str, msg: str, priority: str = "high",
         log.debug("ntfy push failed", exc_info=True)
 
 
+SHADOW_ORB_LOGGED: dict = {}  # symbol -> date (once per day)
+
+
+def shadow_orb_check(symbol: str, bars) -> None:
+    """ORB SHADOW LOGGER (2026-09-01, no orders ever): journal the first
+    break of the day's 5-MINUTE opening range for scanned movers. The ORB
+    audition file (n=738, +0.81%/trade, hold-to-close) goes to the gate
+    with LIVE shadow evidence beside the replay. Fail-open."""
+    try:
+        today = dt.date.today().isoformat()
+        if SHADOW_ORB_LOGGED.get(symbol) == today:
+            return
+        tb = todays_bars(bars)
+        if len(tb) < 2:
+            return
+        range_hi = float(tb["high"].iloc[0])  # first 5-min RTH bar
+        after = tb.iloc[1:]
+        brk = after[after["high"] > range_hi]
+        if len(brk):
+            SHADOW_ORB_LOGGED[symbol] = today
+            journal(symbol, "BUY", "shadow_orb_entry",
+                    signal_price=round(range_hi, 4),
+                    note=f"[penny] SHADOW ORB: 5-min range hi broken at "
+                         f"{brk.index[0]}, no order placed")
+    except Exception:
+        log.debug("shadow orb check failed for %s", symbol, exc_info=True)
+
+
 def shadow_dip_check(symbol: str, bars) -> None:
     """Journal the FIRST would-be dip-buy of the day (no order, ever): once a
     scanned name's running high reaches +50% over its open, the first bar
@@ -901,6 +929,7 @@ def main() -> None:
                     if not len(bars):
                         continue
                     shadow_dip_check(symbol, bars)  # journal-only, never trades
+                    shadow_orb_check(symbol, bars)  # journal-only, never trades
                     if symbol in state["positions"]:
                         manage(symbol, state, broker, risk,
                                float(bars["close"].iloc[-1]))

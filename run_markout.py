@@ -66,6 +66,18 @@ def markout_row(sym: str, action: str, fill_px: float, t0: dt.datetime) -> dict:
         # negative for a BUY = we "filled" below the real tape = paper fantasy
         row["tape_gap_bps"] = round(side * (fill_px - tape0) / tape0 * 1e4, 1)
         row["tape0_offset_s"] = round(off0, 1) if off0 is not None else None
+    try:
+        # Effective spread vs the NBBO midpoint at fill time (J.Finance 2025:
+        # retail execution costs span 7-46bps across brokers - this measures
+        # OURS, per fill, the number the Rule-605 era will let us benchmark).
+        q = polygon.quote_at(sym, t0)
+        if q:
+            bid, ask = float(q.get("bid_price", 0)), float(q.get("ask_price", 0))
+            if 0 < bid < ask:
+                mid = (bid + ask) / 2
+                row["eff_spread_bps"] = round(side * (fill_px - mid) / mid * 1e4, 1)
+    except Exception:
+        pass
     for d in DELTAS:
         px, off = polygon.trade_at(sym, t0 + dt.timedelta(seconds=d))
         # a print landing >5x the horizon late measures a different regime
@@ -123,6 +135,9 @@ def markout_today(day: str | None = None) -> str | None:
         gap = pd.to_numeric(df.get("tape_gap_bps"), errors="coerce").dropna()
         if len(gap):
             bits.append(f"paper-vs-tape {gap.mean():+.0f}bps")
+        eff = pd.to_numeric(df.get("eff_spread_bps"), errors="coerce").dropna()
+        if len(eff):
+            bits.append(f"eff-spread {eff.mean():+.0f}bps")
         return " | ".join(bits)
     except Exception:
         log.debug("markout_today failed", exc_info=True)

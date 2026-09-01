@@ -38,7 +38,7 @@ MIN_DVOL_M = 1.0          # watch-only floor - deliberately tiny
 TOP_N = 8
 COLS = ["date", "symbol", "captured", "price", "dollar_vol_m", "ann_vol", "best_day",
         "mom_1m", "max_dd_2y", "float_m", "ipo_months", "mcap_m", "news", "ai",
-        "sec_flags", "fwd_1d", "fwd_5d", "fwd_20d", "status"]
+        "rvol_open", "sec_flags", "fwd_1d", "fwd_5d", "fwd_20d", "status"]
 
 
 def save_radar(radar: pd.DataFrame) -> None:
@@ -73,6 +73,7 @@ def capture_today(radar: pd.DataFrame, extra: list[str],
     except Exception as e:
         log.warning("screener unavailable (%s) - manual adds only", e)
         pool = []
+    snap_dvol: dict = {}
     try:
         # Polygon full-market snapshot: every US ticker's live day-change in
         # ONE call. Merged AHEAD of the screener pool - during pennymo's
@@ -87,6 +88,7 @@ def capture_today(radar: pd.DataFrame, extra: list[str],
                      len(snap), ", ".join(f"{m['symbol']} +{m['pct']}%"
                                           for m in snap[:5]))
             pool = [m["symbol"] for m in snap] + pool
+            snap_dvol = {m["symbol"]: m["dollar_vol_m"] for m in snap}
     except Exception:
         log.debug("polygon snapshot unavailable", exc_info=True)
     from bot.config import BLOCKED_SYMBOLS
@@ -121,7 +123,29 @@ def capture_today(radar: pd.DataFrame, extra: list[str],
         if forced or (MIN_PRICE <= row["price"] <= MAX_PRICE
                       and row["dollar_vol_m"] >= MIN_DVOL_M):
             scored.append((forced, row))
-    scored.sort(key=lambda fr: (not fr[0], -(fr[1]["big_moves_3m"] or 0)))
+    # RANKING UPGRADE (2026-09-01, from the research sweep): opening relative
+    # volume is a MONOTONE continuous predictor of follow-through in the
+    # peer-reviewed stocks-in-play data (-0.02R below 1x to +0.38R above 30x)
+    # - so candidates are ORDERED by today's volume vs their own normal-by-
+    # now, not just by history. Pick order = watchlist order = which mover
+    # gets the entry slot first. Fallback: the old big-moves ranking.
+    def _rvol_rank(row) -> float:
+        try:
+            from bot.scanner import expected_volume_fraction
+
+            base = float(row.get("dollar_vol_m") or 0)
+            snap_now = float(snap_dvol.get(row["symbol"], 0))
+            frac = expected_volume_fraction(dt.datetime.now())
+            if base > 0 and snap_now > 0 and frac > 0:
+                return snap_now / (base * frac)
+        except Exception:
+            pass
+        return 0.0
+
+    for _, row in scored:
+        row["rvol_open"] = round(_rvol_rank(row), 1) or None
+    scored.sort(key=lambda fr: (not fr[0], -(fr[1].get("rvol_open") or 0),
+                                -(fr[1]["big_moves_3m"] or 0)))
 
     for forced, row in scored[: TOP_N + len(extra)]:
         if row["symbol"] in already:
@@ -195,6 +219,7 @@ def capture_today(radar: pd.DataFrame, extra: list[str],
             "date": today, "symbol": row["symbol"],
             "captured": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
             "sec_flags": sec_flags, "news": news, "ai": ai_read,
+            "rvol_open": row.get("rvol_open"),
             "float_m": en.get("float_m"), "ipo_months": en.get("ipo_months"),
             "mcap_m": en.get("mcap_m"),
             "price": round(row["price"], 4),

@@ -399,6 +399,21 @@ def main() -> None:
 
     al.finish()
     HEALTH.write_text(json.dumps(health, indent=2), encoding="utf-8")
+
+    # DEAD-MAN'S SWITCH (born of the silent VM deaths of 08-17 and 08-31:
+    # every alarm lives ON the VM, so a dead VM = a silent phone). If
+    # alerts.yaml has healthcheck_url (e.g. a free healthchecks.io ping
+    # address), ping it every run; the external service pages the phone
+    # when pings STOP. Fail-silent - never break the watchdog itself.
+    try:
+        import yaml
+
+        hc = (yaml.safe_load(ALERTS_CFG.read_text(encoding="utf-8")) or {}) \
+            .get("healthcheck_url")
+        if hc:
+            urllib.request.urlopen(hc, timeout=10)
+    except Exception:
+        log.debug("healthcheck ping failed", exc_info=True)
     if problems:
         log.warning("Watchdog verdict: %d problem(s): %s", len(problems), "; ".join(problems))
     else:
